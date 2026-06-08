@@ -1,12 +1,12 @@
 "use client"
 
 import { useState } from "react"
+import { Sidebar } from "@/components/prospecting/Sidebar"
 import { MetricsBar } from "@/components/prospecting/MetricsBar"
+import { OperationsCard } from "@/components/prospecting/OperationsCard"
 import { WhatsAppCard } from "@/components/prospecting/WhatsAppCard"
-import { ImportCard } from "@/components/prospecting/ImportCard"
-import { ControlCard } from "@/components/prospecting/ControlCard"
-import { MessagePreviewCard } from "@/components/prospecting/MessagePreviewCard"
-import { QueueMiniCard } from "@/components/prospecting/QueueMiniCard"
+import { QueueStepper } from "@/components/prospecting/QueueStepper"
+import { ConversationCard } from "@/components/prospecting/ConversationCard"
 import { ActionMenu, type MenuAction } from "@/components/prospecting/ActionMenu"
 import { ConfirmModal } from "@/components/prospecting/ConfirmModal"
 import {
@@ -14,26 +14,17 @@ import {
   mockTemplates,
   mockCampaignStats,
   mockSendingRate,
-  mockImportSummary,
   type SimStatus,
   type WhatsAppStatus,
-  type ImportSummary,
 } from "@/lib/mock-data"
 
-type ModalKind =
-  | null
-  | "iniciar"
-  | "pausar"
-  | "retomar"
-  | "cancelar"
-  | "nova"
-  | "resetar"
+type ModalKind = null | "iniciar" | "pausar" | "retomar" | "cancelar" | "nova" | "resetar"
 
 const PRIMARY_LABEL: Record<SimStatus, string> = {
   "sem-campanha": "Nova campanha",
   pronta: "Iniciar simulação",
-  simulando: "Pausar",
-  pausada: "Retomar",
+  simulando: "Pausar simulação",
+  pausada: "Retomar simulação",
   finalizada: "Nova campanha",
 }
 
@@ -41,28 +32,19 @@ export default function ProspectingPage() {
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("conectado")
   const [sim, setSim] = useState<SimStatus>("pronta")
   const [rate] = useState(mockSendingRate)
-  const [rateChanged] = useState(false)
-  const [importSummary, setImportSummary] = useState<ImportSummary | null>(mockImportSummary)
   const [modal, setModal] = useState<ModalKind>(null)
 
   const isRunning = sim === "simulando"
 
-  // ── Derivações de fila (mock) ────────────────────────────────────────────
   const current = mockLeads.find((l) => l.status === "proximo") ?? mockLeads[1]
   const upNext = mockLeads.filter((l) => l.status === "aguardando")
   const lastSent = mockLeads.filter((l) => l.status === "enviado").at(-1) ?? null
-  const simuladosCount = mockCampaignStats.enviadosHoje
 
-  // ── WhatsApp ───────────────────────────────────────────────────────────────
   const handleConfigureWhatsApp = () => {
     setWhatsappStatus("conectando")
-    setTimeout(() => setWhatsappStatus("conectado"), 2200)
-  }
-  const handleRefreshQR = () => {
-    if (whatsappStatus !== "conectando") handleConfigureWhatsApp()
+    setTimeout(() => setWhatsappStatus("conectado"), 2000)
   }
 
-  // ── Botão principal (um por estado) ─────────────────────────────────────────
   const handlePrimary = () => {
     switch (sim) {
       case "sem-campanha":
@@ -81,7 +63,6 @@ export default function ProspectingPage() {
     }
   }
 
-  // ── Ações secundárias (menu "...") ──────────────────────────────────────────
   const secondaryActions: MenuAction[] = (() => {
     const actions: MenuAction[] = []
     if (sim === "simulando" || sim === "pausada") {
@@ -94,11 +75,6 @@ export default function ProspectingPage() {
     return actions
   })()
 
-  const handleConfirmImport = (fileName: string) => {
-    setImportSummary({ ...mockImportSummary, arquivo: fileName })
-  }
-
-  // ── Conteúdo dos modais ─────────────────────────────────────────────────────
   const modalProps = (() => {
     switch (modal) {
       case "iniciar":
@@ -139,10 +115,7 @@ export default function ProspectingPage() {
           description: "Os dados da campanha anterior serão limpos para você começar do zero.",
           confirmLabel: "Nova campanha",
           tone: "primary" as const,
-          onConfirm: () => {
-            setImportSummary(null)
-            setSim("sem-campanha")
-          },
+          onConfirm: () => setSim("pronta"),
         }
       case "resetar":
         return {
@@ -158,26 +131,26 @@ export default function ProspectingPage() {
   })()
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
-      {/* ── TOPO LIMPO ────────────────────────────────────────────────────────── */}
-      <header className="shrink-0 px-3 sm:px-5">
-        <div className="mx-auto flex h-14 max-w-screen-2xl items-center gap-3">
-          {/* Logo */}
-          <div className="flex shrink-0 items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
-                <polygon points="5 3 19 12 5 21 5 3" />
+    <div className="flex min-h-[100dvh] gap-4 p-3 sm:p-4">
+      <Sidebar />
+
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        {/* ── HEADER ── */}
+        <header className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 lg:hidden">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl btn-glossy">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
+                <polygon points="6 4 20 12 6 20 6 4" />
               </svg>
             </div>
-            <div className="leading-tight">
-              <p className="text-xs font-bold text-foreground">Central Play Plus</p>
-              <p className="text-[10px] text-muted-foreground">Prospecção</p>
-            </div>
+          </div>
+          <div className="leading-tight">
+            <h1 className="text-base font-bold text-foreground sm:text-lg">Central Play Plus</h1>
+            <p className="text-xs text-muted-foreground">Prospecção</p>
           </div>
 
-          {/* Status WhatsApp */}
           <span
-            className={`ml-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
+            className={`ml-2 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
               whatsappStatus === "conectado"
                 ? "bg-[var(--success)]/12 text-[var(--success)]"
                 : whatsappStatus === "conectando"
@@ -203,87 +176,58 @@ export default function ProspectingPage() {
             </span>
           </span>
 
-          {/* Botão principal único + menu */}
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={handlePrimary}
-              className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${
+              className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${
                 isRunning
-                  ? "bg-secondary text-foreground hover:bg-muted"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90"
+                  ? "border border-border bg-card text-foreground shadow-[0_1px_0_0_oklch(1_0_0)_inset] hover:bg-secondary"
+                  : "text-primary-foreground btn-glossy"
               }`}
             >
               {PRIMARY_LABEL[sim]}
             </button>
             <ActionMenu actions={secondaryActions} />
+            <button
+              aria-label="Notificações"
+              className="grid h-10 w-10 place-items-center rounded-xl border border-border bg-card text-muted-foreground shadow-[0_1px_0_0_oklch(1_0_0)_inset] transition-colors hover:text-foreground"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+            </button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* ── CONTEÚDO ───────────────────────────────────────────────────────────── */}
-      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-y-auto px-3 pb-3 sm:gap-4 sm:overflow-hidden sm:px-5 sm:pb-5">
+        {/* ── KPIs ── */}
         <MetricsBar stats={mockCampaignStats} />
 
-        {/* DESKTOP */}
-        <div className="hidden flex-1 grid-rows-[minmax(0,0.82fr)_minmax(0,1fr)] gap-4 overflow-hidden lg:grid">
-          <div className="grid grid-cols-3 gap-4 overflow-hidden">
-            <WhatsAppCard
-              status={whatsappStatus}
-              onRefreshQR={handleRefreshQR}
-              onConfigure={handleConfigureWhatsApp}
-            />
-            <ImportCard summary={importSummary} onConfirmImport={handleConfirmImport} />
-            <ControlCard
-              status={sim}
-              rate={rate}
-              rateChanged={rateChanged}
-              nextLead={current}
-              timer={mockCampaignStats.proximoEnvio}
-              simuladosCount={simuladosCount}
-              onSaveRate={() => {}}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4 overflow-hidden">
-            <MessagePreviewCard templates={mockTemplates} onEdit={() => {}} />
-            <QueueMiniCard
-              current={current}
-              upNext={upNext}
-              lastSent={lastSent}
-              isRunning={isRunning}
-              onViewHistory={() => {}}
-            />
-          </div>
-        </div>
-
-        {/* MOBILE — ordem do prompt */}
-        <div className="flex flex-col gap-3 lg:hidden">
-          <ControlCard
+        {/* ── LINHA 1: Operações + WhatsApp ── */}
+        <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+          <OperationsCard
             status={sim}
             rate={rate}
-            rateChanged={rateChanged}
             nextLead={current}
             timer={mockCampaignStats.proximoEnvio}
-            simuladosCount={simuladosCount}
-            onSaveRate={() => {}}
+            onPrimary={handlePrimary}
           />
-          <WhatsAppCard
-            status={whatsappStatus}
-            onRefreshQR={handleRefreshQR}
-            onConfigure={handleConfigureWhatsApp}
-          />
-          <ImportCard summary={importSummary} onConfirmImport={handleConfirmImport} />
-          <MessagePreviewCard templates={mockTemplates} onEdit={() => {}} />
-          <QueueMiniCard
-            current={current}
+          <WhatsAppCard status={whatsappStatus} onTrocarNumero={handleConfigureWhatsApp} />
+        </div>
+
+        {/* ── LINHA 2: Fila + Conversa ── */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <QueueStepper
             upNext={upNext}
             lastSent={lastSent}
+            totalNaFila={mockCampaignStats.naFila}
             isRunning={isRunning}
             onViewHistory={() => {}}
           />
+          <ConversationCard templates={mockTemplates} />
         </div>
-      </main>
+      </div>
 
-      {/* ── MODAIS ─────────────────────────────────────────────────────────────── */}
       {modalProps && (
         <ConfirmModal
           open={modal !== null}

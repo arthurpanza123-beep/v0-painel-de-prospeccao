@@ -30,7 +30,7 @@ export function ActionMenu({ actions }: { actions: MenuAction[] }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Mais opções"
-        className="flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:text-foreground"
+        className="grid h-10 w-10 place-items-center rounded-xl border border-border bg-card text-muted-foreground shadow-[0_1px_0_0_oklch(1_0_0)_inset] transition-colors hover:text-foreground"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <circle cx="5" cy="12" r="1.6" />
