@@ -3,6 +3,7 @@ export interface ProspectionConfig {
   panel2ApiBaseUrl: string
   dryRun: boolean
   enabled: boolean
+  prospectionDatabaseUrl: string
   defaultBatchLimit: number
   defaultWindowMinutes: number
   defaultMinDelaySeconds: number
@@ -12,6 +13,7 @@ export interface ProspectionConfig {
   evolutionApiUrl: string
   evolutionApiKey: string
   evolutionInstance: string
+  prospectionPublicUrl: string
   evolutionTimeoutMs: number
   realAllowedPhones: string[]
   storageFile: string
@@ -42,6 +44,7 @@ export function getProspectionConfig(): ProspectionConfig {
     panel2ApiBaseUrl: String(process.env.PANEL2_API_BASE_URL || 'http://127.0.0.1:3002').replace(/\/+$/, ''),
     dryRun: boolEnv(process.env.PROSPECTION_DRY_RUN, true),
     enabled: boolEnv(process.env.PROSPECTION_ENABLED, false),
+    prospectionDatabaseUrl: String(process.env.PROSPECTION_DATABASE_URL || '').trim(),
     defaultBatchLimit: intEnv(process.env.PROSPECTION_DEFAULT_BATCH_LIMIT, 15),
     defaultWindowMinutes: intEnv(process.env.PROSPECTION_DEFAULT_WINDOW_MINUTES, 50),
     defaultMinDelaySeconds: intEnv(process.env.PROSPECTION_DEFAULT_MIN_DELAY_SECONDS, 160),
@@ -51,6 +54,7 @@ export function getProspectionConfig(): ProspectionConfig {
     evolutionApiUrl: String(process.env.EVOLUTION_API_URL || '').replace(/\/+$/, ''),
     evolutionApiKey: String(process.env.EVOLUTION_API_KEY || ''),
     evolutionInstance: String(process.env.EVOLUTION_PROSPECTION_INSTANCE || 'centralplay-leads'),
+    prospectionPublicUrl: String(process.env.PROSPECTION_PUBLIC_URL || 'https://prospeccao.centralplayplus.com.br').replace(/\/+$/, ''),
     evolutionTimeoutMs: intEnv(process.env.EVOLUTION_TIMEOUT_MS, 30000),
     realAllowedPhones: listEnv(process.env.PROSPECTION_REAL_ALLOWED_PHONES),
     storageFile: String(process.env.PROSPECTION_STORAGE_FILE || 'storage/prospection-db.json'),

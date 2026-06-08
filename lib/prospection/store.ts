@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getProspectionConfig } from './config'
+import * as postgresBackend from './postgres-backend'
 import { normalizePhone } from './phone'
 import { defaultTemplates, renderTemplate } from './templates'
 import type {
@@ -86,10 +87,12 @@ async function withLock<T>(fn: (db: ProspectionDb) => Promise<T>) {
 }
 
 export async function getDbSnapshot() {
+  if (postgresBackend.isEnabled()) return postgresBackend.getDbSnapshot()
   return readDb()
 }
 
 export async function createCampaign(input?: Partial<ProspectionCampaign>) {
+  if (postgresBackend.isEnabled()) return postgresBackend.createCampaign(input)
   const config = getProspectionConfig()
   return withLock(async (db) => {
     const timestamp = now()
@@ -115,6 +118,7 @@ export async function createCampaign(input?: Partial<ProspectionCampaign>) {
 }
 
 export async function getOrCreateDraftCampaign() {
+  if (postgresBackend.isEnabled()) return postgresBackend.getOrCreateDraftCampaign()
   const db = await readDb()
   const existing = db.campaigns.find((campaign) => ['draft', 'paused', 'running'].includes(campaign.status))
   if (existing) return existing
@@ -122,6 +126,7 @@ export async function getOrCreateDraftCampaign() {
 }
 
 export async function updateCampaignStatus(campaignId: string, status: ProspectionCampaign['status']) {
+  if (postgresBackend.isEnabled()) return postgresBackend.updateCampaignStatus(campaignId, status)
   return withLock(async (db) => {
     const campaign = db.campaigns.find((item) => item.id === campaignId)
     if (!campaign) throw new Error('Campanha nao encontrada.')
@@ -141,11 +146,13 @@ export async function updateCampaignStatus(campaignId: string, status: Prospecti
 }
 
 export async function listTemplates() {
+  if (postgresBackend.isEnabled()) return postgresBackend.listTemplates()
   const db = await readDb()
   return db.templates.sort((a, b) => a.weight - b.weight)
 }
 
 export async function updateTemplate(templateId: number, patch: Partial<ProspectionTemplate>) {
+  if (postgresBackend.isEnabled()) return postgresBackend.updateTemplate(templateId, patch)
   return withLock(async (db) => {
     const template = db.templates.find((item) => item.id === templateId)
     if (!template) throw new Error('Template nao encontrado.')
@@ -196,6 +203,7 @@ function pick(row: Record<string, unknown>, aliases: string[]) {
 }
 
 export async function importRows(rows: Array<Record<string, unknown>>, sourceFileName: string, campaignId?: string): Promise<ImportSummary> {
+  if (postgresBackend.isEnabled()) return postgresBackend.importRows(rows, sourceFileName, campaignId)
   const campaign = campaignId ? (await readDb()).campaigns.find((item) => item.id === campaignId) : await getOrCreateDraftCampaign()
   if (!campaign) throw new Error('Campanha nao encontrada.')
 
@@ -227,7 +235,7 @@ export async function importRows(rows: Array<Record<string, unknown>>, sourceFil
         base.status = 'invalid_phone'
         base.error_message = 'Telefone invalido.'
         summary.invalid += 1
-      } else if (seenInFile.has(phone) || db.leads.some((lead) => lead.phone_e164 === phone && !['invalid_phone', 'duplicate'].includes(lead.status))) {
+      } else if (seenInFile.has(phone)) {
         base.status = 'duplicate'
         base.error_message = 'Telefone duplicado ou ja importado.'
         summary.duplicates += 1
@@ -235,6 +243,10 @@ export async function importRows(rows: Array<Record<string, unknown>>, sourceFil
         base.status = 'opt_out'
         base.error_message = 'Telefone em opt-out global.'
         summary.optOutIgnored += 1
+      } else if (db.leads.some((lead) => lead.phone_e164 === phone && !['invalid_phone', 'duplicate'].includes(lead.status))) {
+        base.status = 'duplicate'
+        base.error_message = 'Telefone duplicado ou ja importado.'
+        summary.duplicates += 1
       } else if (db.messages.some((message) => message.direction === 'outbound' && db.leads.find((lead) => lead.id === message.lead_id)?.phone_e164 === phone)) {
         base.status = 'duplicate'
         base.error_message = 'Telefone ja recebeu abordagem anterior.'
@@ -284,6 +296,7 @@ function baseLead(campaignId: string, name: string, phoneRaw: string, phone: str
 }
 
 export async function listLeads(input?: { status?: string; page?: number; pageSize?: number }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.listLeads(input)
   const db = await readDb()
   const page = Math.max(1, input?.page || 1)
   const pageSize = Math.min(100, Math.max(1, input?.pageSize || 50))
@@ -297,6 +310,7 @@ export async function listLeads(input?: { status?: string; page?: number; pageSi
 }
 
 export async function getQueueSummary() {
+  if (postgresBackend.isEnabled()) return postgresBackend.getQueueSummary()
   const db = await readDb()
   const activeCampaign = db.campaigns.find((campaign) => ['running', 'paused', 'draft'].includes(campaign.status)) || null
   const current = db.leads.find((lead) => lead.status === 'sending') || null
@@ -312,6 +326,7 @@ export async function getQueueSummary() {
 }
 
 export async function getStatus() {
+  if (postgresBackend.isEnabled()) return postgresBackend.getStatus()
   const db = await readDb()
   const activeCampaign = db.campaigns.find((campaign) => ['running', 'paused', 'draft'].includes(campaign.status)) || null
   const today = new Date().toISOString().slice(0, 10)
@@ -346,6 +361,7 @@ function isWithinAllowedWindow(campaign: ProspectionCampaign, date = new Date())
 }
 
 export async function reserveNextLead() {
+  if (postgresBackend.isEnabled()) return postgresBackend.reserveNextLead()
   return withLock(async (db) => {
     const campaign = db.campaigns.find((item) => item.status === 'running')
     if (!campaign) return { ok: false, code: 'NO_RUNNING_CAMPAIGN' as const }
@@ -397,6 +413,7 @@ export async function completeSend(input: {
   status: 'sent' | 'dry_run'
   evolutionMessageId?: string | null
 }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.completeSend(input)
   return withLock(async (db) => {
     const lead = db.leads.find((item) => item.id === input.leadId)
     const campaign = db.campaigns.find((item) => item.id === input.campaignId)
@@ -439,6 +456,7 @@ export async function completeSend(input: {
 }
 
 export async function failSend(input: { campaignId: string; leadId: string; error: string }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.failSend(input)
   return withLock(async (db) => {
     const lead = db.leads.find((item) => item.id === input.leadId)
     if (!lead) throw new Error('Lead nao encontrado.')
@@ -450,10 +468,15 @@ export async function failSend(input: { campaignId: string; leadId: string; erro
   })
 }
 
-export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string }) {
+export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string; messageId?: string | null }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.recordInbound(input)
   const phone = normalizePhone(input.phone)
   if (!phone) throw new Error('Telefone inbound invalido.')
   return withLock(async (db) => {
+    if (input.messageId && db.messages.some((message) => message.direction === 'inbound' && message.evolution_message_id === input.messageId)) {
+      event(db, { campaign_id: null, lead_id: null, event_type: 'inbound_duplicate', message: 'Mensagem inbound duplicada ignorada.', metadata: { phone, messageId: input.messageId } })
+      return { lead: null, duplicate: true }
+    }
     const lead = db.leads
       .filter((item) => item.phone_e164 === phone)
       .sort((a, b) => {
@@ -476,7 +499,7 @@ export async function recordInbound(input: { phone: string; text: string; classi
       template_id: null,
       body: input.text,
       status: input.classification,
-      evolution_message_id: null,
+      evolution_message_id: input.messageId || null,
       error_message: null,
       created_at: timestamp,
     }

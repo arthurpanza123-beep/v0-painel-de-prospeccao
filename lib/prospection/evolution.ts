@@ -8,6 +8,15 @@ function headers(apiKey: string) {
   }
 }
 
+function parseJson(text: string) {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
 async function evolutionFetch(path: string, init?: RequestInit) {
   const config = getProspectionConfig()
   if (!config.evolutionApiUrl || !config.evolutionApiKey) {
@@ -22,13 +31,37 @@ async function evolutionFetch(path: string, init?: RequestInit) {
       signal: controller.signal,
     })
     const text = await response.text().catch(() => '')
-    const data = text ? JSON.parse(text) : null
-    return { ok: response.ok, configured: true, status: response.status, data, code: response.ok ? 'OK' : 'EVOLUTION_HTTP_ERROR' }
+    const data = parseJson(text)
+    return {
+      ok: response.ok,
+      configured: true,
+      status: response.status,
+      data,
+      code: response.ok ? 'OK' : response.status === 401 || response.status === 403 ? 'EVOLUTION_UNAUTHORIZED' : response.status === 404 ? 'EVOLUTION_INSTANCE_MISSING' : 'EVOLUTION_HTTP_ERROR',
+    }
   } catch (error) {
     return { ok: false, configured: true, status: 0, data: null, code: 'EVOLUTION_REQUEST_FAILED', error: error instanceof Error ? error.message : String(error) }
   } finally {
     clearTimeout(timeout)
   }
+}
+
+function extractInstances(data: unknown) {
+  if (!data) return []
+  if (Array.isArray(data)) return data
+  if (typeof data === 'object') {
+    const root = data as Record<string, unknown>
+    if (Array.isArray(root.response)) return root.response
+    if (Array.isArray(root.instances)) return root.instances
+    if (root.instance && typeof root.instance === 'object') return [root]
+  }
+  return []
+}
+
+function instanceName(item: unknown) {
+  const root = item && typeof item === 'object' ? item as Record<string, unknown> : {}
+  const instance = root.instance && typeof root.instance === 'object' ? root.instance as Record<string, unknown> : root
+  return String(instance.instanceName || instance.name || '').trim()
 }
 
 function pickQr(data: unknown) {
@@ -38,25 +71,98 @@ function pickQr(data: unknown) {
   return base64.startsWith('data:image') ? base64 : `data:image/png;base64,${base64.replace(/^data:image\/png;base64,/, '')}`
 }
 
+async function configureProspectionWebhook() {
+  const config = getProspectionConfig()
+  return evolutionFetch(`/webhook/set/${encodeURIComponent(config.evolutionInstance)}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      enabled: true,
+      url: `${config.prospectionPublicUrl}/api/prospection/webhook`,
+      webhookByEvents: true,
+      webhookBase64: true,
+      events: ['QRCODE_UPDATED', 'MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+    }),
+  })
+}
+
+async function ensureProspectionInstance() {
+  const config = getProspectionConfig()
+  const fetchResult = await evolutionFetch('/instance/fetchInstances')
+  if (!fetchResult.ok) return fetchResult
+  const instances = extractInstances(fetchResult.data)
+  const existing = instances.find((item) => instanceName(item) === config.evolutionInstance)
+  if (existing) {
+    return { ok: true, configured: true, created: false, status: 200, code: 'INSTANCE_EXISTS', data: existing }
+  }
+  const createResult = await evolutionFetch('/instance/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      instanceName: config.evolutionInstance,
+      integration: 'WHATSAPP-BAILEYS',
+      qrcode: true,
+      rejectCall: true,
+      groupsIgnore: true,
+      alwaysOnline: true,
+      readMessages: true,
+      readStatus: true,
+      syncFullHistory: false,
+      webhook: {
+        enabled: true,
+        url: `${config.prospectionPublicUrl}/api/prospection/webhook`,
+        webhookByEvents: true,
+        webhookBase64: true,
+        events: ['QRCODE_UPDATED', 'MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
+      },
+    }),
+  })
+  if (!createResult.ok) return createResult
+  return { ...createResult, created: true }
+}
+
 export async function getWhatsappStatus() {
   const config = getProspectionConfig()
   const result = await evolutionFetch(`/instance/connectionState/${encodeURIComponent(config.evolutionInstance)}`)
   const stateData = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {}
   const state = String(stateData.state || (stateData.instance as Record<string, unknown> | undefined)?.state || '').toLowerCase()
   const connected = ['open', 'connected', 'online'].includes(state)
+  const missing = result.status === 404 || result.code === 'EVOLUTION_INSTANCE_MISSING'
   return {
-    ok: result.ok,
+    ok: result.ok || missing,
     configured: result.configured,
     instance: config.evolutionInstance,
-    status: connected ? 'connected' : state ? 'disconnected' : 'unknown',
+    status: missing ? 'missing' : connected ? 'connected' : state ? 'disconnected' : 'unknown',
     state,
-    code: result.code,
+    code: missing ? 'EVOLUTION_INSTANCE_MISSING' : result.code,
+    message: missing ? 'Instancia de prospecção ainda nao foi criada na Evolution.' : undefined,
   }
 }
 
 export async function requestWhatsappQr() {
   const config = getProspectionConfig()
+  const ensured = await ensureProspectionInstance()
+  if (!ensured.ok) {
+    return {
+      ok: false,
+      configured: ensured.configured,
+      instance: config.evolutionInstance,
+      qrCode: null,
+      code: ensured.code || 'EVOLUTION_HTTP_ERROR',
+      message: 'Falha ao preparar a instância de prospecção na Evolution.',
+      status: ensured.status,
+    }
+  }
+  await configureProspectionWebhook().catch(() => null)
   const result = await evolutionFetch(`/instance/connect/${encodeURIComponent(config.evolutionInstance)}`, { method: 'GET' })
+  if (!result.ok && result.status === 404) {
+    return {
+      ok: false,
+      configured: result.configured,
+      instance: config.evolutionInstance,
+      qrCode: null,
+      code: 'EVOLUTION_INSTANCE_MISSING',
+      message: 'Instancia de prospecção nao encontrada na Evolution.',
+    }
+  }
   return {
     ok: result.ok,
     configured: result.configured,

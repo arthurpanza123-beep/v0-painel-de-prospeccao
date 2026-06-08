@@ -30,6 +30,12 @@ function fromMe(payload: Record<string, unknown>) {
   return Boolean(key.fromMe || data.fromMe)
 }
 
+function pickMessageId(payload: Record<string, unknown>) {
+  const data = payload.data && typeof payload.data === 'object' ? payload.data as Record<string, unknown> : payload
+  const key = data.key && typeof data.key === 'object' ? data.key as Record<string, unknown> : {}
+  return String(key.id || data.messageId || data.id || payload.messageId || '').trim() || null
+}
+
 export async function POST(request: Request) {
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null
   if (!payload) return NextResponse.json({ ok: false, code: 'INVALID_JSON' }, { status: 400 })
@@ -37,10 +43,14 @@ export async function POST(request: Request) {
   const phone = pickPhone(payload)
   const text = pickText(payload)
   if (!phone || !text) return NextResponse.json({ ok: false, code: 'PHONE_OR_TEXT_REQUIRED' }, { status: 400 })
+  const messageId = pickMessageId(payload)
 
   const classification = classifyInbound(text)
   const device = detectDevice(text)
-  const record = await recordInbound({ phone, text, classification, device })
+  const record = await recordInbound({ phone, text, classification, device, messageId })
+  if ('duplicate' in record && record.duplicate) {
+    return NextResponse.json({ ok: true, code: 'INBOUND_DUPLICATE_IGNORED' })
+  }
 
   let action: unknown = null
   if (classification === 'positive') {
