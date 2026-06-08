@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { MetricsBar } from "@/components/prospecting/MetricsBar"
 import { WhatsAppMiniCard } from "@/components/prospecting/WhatsAppMiniCard"
 import { ImportMiniCard } from "@/components/prospecting/ImportMiniCard"
@@ -8,45 +8,172 @@ import { RateMiniCard } from "@/components/prospecting/RateMiniCard"
 import { MessagePreviewCard } from "@/components/prospecting/MessagePreviewCard"
 import { QueueMiniCard } from "@/components/prospecting/QueueMiniCard"
 import {
-  mockLeads,
   mockTemplates,
   mockCampaignStats,
   mockSendingRate,
   type CampaignStatus,
   type WhatsAppStatus,
   type SendingRate,
+  type Lead,
+  type MessageTemplate,
 } from "@/lib/mock-data"
 
 type MobileTab = "whatsapp" | "importar" | "ritmo" | "mensagem" | "fila"
+
+type ApiStatus = {
+  stats?: {
+    leadsImportados: number
+    naFila: number
+    enviadosHoje: number
+    responderam: number
+    optOut: number
+    proximoEnvio: number | null
+  }
+  whatsapp?: { status?: string }
+  activeCampaign?: { id: string; status: string } | null
+  queue?: {
+    current: ApiLead | null
+    upcoming: ApiLead[]
+    lastSent: ApiLead | null
+  }
+}
+
+type ApiLead = {
+  id: string
+  name: string
+  phone_e164: string
+  email?: string | null
+  city?: string | null
+  uf?: string | null
+  status: string
+  template_id?: number | null
+  scheduled_at?: string | null
+  sent_at?: string | null
+}
+
+const formatCountdown = (seconds?: number | null) => {
+  if (seconds == null) return "--:--"
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
+}
+
+const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | null => {
+  if (!lead) return null
+  return {
+    id: lead.id,
+    nome: lead.name || "Sem nome",
+    telefone: lead.phone_e164,
+    email: lead.email || "",
+    cidade: lead.city || "",
+    uf: lead.uf || "",
+    status: fallbackStatus,
+    templateIndex: Math.max(0, (lead.template_id || 1) - 1),
+    proximoEnvio: lead.scheduled_at ? new Date(lead.scheduled_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : undefined,
+    enviadoEm: lead.sent_at ? new Date(lead.sent_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : undefined,
+  }
+}
 
 export default function ProspectingPage() {
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
   const [campaignStatus, setCampaignStatus] = useState<CampaignStatus>("parada")
   const [sendingRate, setSendingRate] = useState(mockSendingRate)
   const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
+  const [stats, setStats] = useState(mockCampaignStats)
+  const [templates, setTemplates] = useState<MessageTemplate[]>(mockTemplates)
+  const [queue, setQueue] = useState<{ current: Lead | null; upNext: Lead[]; lastSent: Lead | null }>({ current: null, upNext: [], lastSent: null })
+  const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null)
+  const [qrCode, setQrCode] = useState<string | null>(null)
 
   const isRunning = campaignStatus === "rodando"
   const isPaused = campaignStatus === "pausada"
 
-  const handleToggleCampaign = () =>
-    setCampaignStatus(isRunning ? "pausada" : "rodando")
-  const handlePause = () => setCampaignStatus("pausada")
-  const handleConfigureWhatsApp = () => {
+  const refresh = useCallback(async () => {
+    const [statusRes, templatesRes] = await Promise.all([
+      fetch("/api/prospection/status", { cache: "no-store" }).then((r) => r.json() as Promise<ApiStatus>),
+      fetch("/api/prospection/templates", { cache: "no-store" }).then((r) => r.json()),
+    ])
+    setStats({
+      leadsImportados: statusRes.stats?.leadsImportados || 0,
+      naFila: statusRes.stats?.naFila || 0,
+      enviadosHoje: statusRes.stats?.enviadosHoje || 0,
+      responderam: statusRes.stats?.responderam || 0,
+      optOut: statusRes.stats?.optOut || 0,
+      proximoEnvio: formatCountdown(statusRes.stats?.proximoEnvio),
+    })
+    setWhatsappStatus(statusRes.whatsapp?.status === "connected" ? "conectado" : "desconectado")
+    setActiveCampaignId(statusRes.activeCampaign?.id || null)
+    setCampaignStatus(
+      statusRes.activeCampaign?.status === "running"
+        ? "rodando"
+        : statusRes.activeCampaign?.status === "paused"
+        ? "pausada"
+        : statusRes.activeCampaign?.status === "completed"
+        ? "concluida"
+        : "parada",
+    )
+    setQueue({
+      current: mapLead(statusRes.queue?.current || null, "enviando"),
+      upNext: (statusRes.queue?.upcoming || []).map((lead) => mapLead(lead, "aguardando")).filter(Boolean) as Lead[],
+      lastSent: mapLead(statusRes.queue?.lastSent || null, "enviado"),
+    })
+    setTemplates((templatesRes.templates || []).map((template: { id: number; name: string; body: string }) => ({
+      id: template.id,
+      titulo: template.name,
+      corpo: template.body,
+    })))
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+    const timer = setInterval(() => void refresh(), 10000)
+    return () => clearInterval(timer)
+  }, [refresh])
+
+  const ensureCampaign = async () => {
+    if (activeCampaignId) return activeCampaignId
+    const response = await fetch("/api/prospection/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Campanha de Prospecção" }) })
+    const payload = await response.json()
+    const id = payload.campaign?.id
+    setActiveCampaignId(id)
+    return id
+  }
+
+  const handleToggleCampaign = async () => {
+    const id = await ensureCampaign()
+    if (!id) return
+    await fetch(`/api/prospection/campaigns/${id}/${isRunning ? "pause" : "start"}`, { method: "POST" })
+    await refresh()
+  }
+  const handlePause = async () => {
+    if (!activeCampaignId) return
+    await fetch(`/api/prospection/campaigns/${activeCampaignId}/pause`, { method: "POST" })
+    await refresh()
+  }
+  const handleConfigureWhatsApp = async () => {
     setWhatsappStatus("conectando")
-    setTimeout(() => setWhatsappStatus("conectado"), 2200)
+    const response = await fetch("/api/prospection/whatsapp/qr", { method: "POST" })
+    const payload = await response.json()
+    setQrCode(payload.qrCode || null)
+    setWhatsappStatus("desconectado")
   }
   const handleRefreshQR = () => {
-    if (whatsappStatus === "desconectado") handleConfigureWhatsApp()
+    void handleConfigureWhatsApp()
   }
-  const handleConfirmImport = () => {}
+  const handleConfirmImport = async (file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    if (activeCampaignId) form.append("campaignId", activeCampaignId)
+    const response = await fetch("/api/prospection/upload", { method: "POST", body: form })
+    const payload = await response.json()
+    await refresh()
+    return payload.summary || null
+  }
   const handleSaveRate = (rate: SendingRate) => setSendingRate(rate)
   const handleEditVariations = () => {}
   const handleViewHistory = () => {}
 
-  // Fila derivada
-  const current = mockLeads.find((l) => l.status === "proximo") ?? mockLeads[1]
-  const upNext = mockLeads.filter((l) => l.status === "aguardando")
-  const lastSent = mockLeads.filter((l) => l.status === "enviado").at(-1) ?? null
+  const templateList = useMemo(() => templates.length ? templates : mockTemplates, [templates])
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
@@ -136,21 +263,21 @@ export default function ProspectingPage() {
 
       {/* Conteúdo — cabe na viewport */}
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4">
-        <MetricsBar stats={mockCampaignStats} />
+        <MetricsBar stats={stats} />
 
         {/* DESKTOP: grid de blocos */}
         <div className="hidden flex-1 grid-rows-[minmax(0,0.78fr)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid">
           <div className="grid grid-cols-3 gap-3 overflow-hidden">
-            <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
+            <WhatsAppMiniCard status={whatsappStatus} qrCode={qrCode} onRefreshQR={handleRefreshQR} />
             <ImportMiniCard onConfirmImport={handleConfirmImport} />
             <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
           </div>
           <div className="grid grid-cols-2 gap-3 overflow-hidden">
-            <MessagePreviewCard templates={mockTemplates} onEdit={handleEditVariations} />
+            <MessagePreviewCard templates={templateList} onEdit={handleEditVariations} />
             <QueueMiniCard
-              current={current}
-              upNext={upNext}
-              lastSent={lastSent}
+              current={queue.current}
+              upNext={queue.upNext}
+              lastSent={queue.lastSent}
               isRunning={isRunning}
               onViewHistory={handleViewHistory}
             />
@@ -161,7 +288,7 @@ export default function ProspectingPage() {
         <div className="flex flex-1 flex-col overflow-hidden lg:hidden">
           <div className="flex-1 overflow-hidden">
             {mobileTab === "whatsapp" && (
-              <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
+              <WhatsAppMiniCard status={whatsappStatus} qrCode={qrCode} onRefreshQR={handleRefreshQR} />
             )}
             {mobileTab === "importar" && (
               <ImportMiniCard onConfirmImport={handleConfirmImport} />
@@ -170,13 +297,13 @@ export default function ProspectingPage() {
               <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
             )}
             {mobileTab === "mensagem" && (
-              <MessagePreviewCard templates={mockTemplates} onEdit={handleEditVariations} />
+              <MessagePreviewCard templates={templateList} onEdit={handleEditVariations} />
             )}
             {mobileTab === "fila" && (
               <QueueMiniCard
-                current={current}
-                upNext={upNext}
-                lastSent={lastSent}
+                current={queue.current}
+                upNext={queue.upNext}
+                lastSent={queue.lastSent}
                 isRunning={isRunning}
                 onViewHistory={handleViewHistory}
               />

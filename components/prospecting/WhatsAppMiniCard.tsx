@@ -4,10 +4,11 @@ import type { WhatsAppStatus } from "@/lib/mock-data"
 
 interface Props {
   status: WhatsAppStatus
+  qrCode?: string | null
   onRefreshQR: () => void
 }
 
-export function WhatsAppMiniCard({ status, onRefreshQR }: Props) {
+export function WhatsAppMiniCard({ status, qrCode, onRefreshQR }: Props) {
   const connected = status === "conectado"
   const connecting = status === "conectando"
 
@@ -55,21 +56,25 @@ export function WhatsAppMiniCard({ status, onRefreshQR }: Props) {
               className="relative grid shrink-0 place-items-center rounded-md border border-border bg-foreground/95 p-1.5"
               aria-label="QR Code do WhatsApp"
             >
-              <div
-                className="grid grid-cols-8 gap-px"
-                style={{ width: 72, height: 72 }}
-                aria-hidden="true"
-              >
-                {Array.from({ length: 64 }).map((_, i) => {
-                  const seed = (i * 7 + ((i % 5) * 13)) % 10
-                  return (
-                    <span
-                      key={i}
-                      className={seed > 4 ? "bg-background" : "bg-transparent"}
-                    />
-                  )
-                })}
-              </div>
+              {qrCode ? (
+                <img src={qrCode} alt="QR Code WhatsApp" width={72} height={72} className="h-[72px] w-[72px]" />
+              ) : (
+                <div
+                  className="grid grid-cols-8 gap-px"
+                  style={{ width: 72, height: 72 }}
+                  aria-hidden="true"
+                >
+                  {Array.from({ length: 64 }).map((_, i) => {
+                    const seed = (i * 7 + ((i % 5) * 13)) % 10
+                    return (
+                      <span
+                        key={i}
+                        className={seed > 4 ? "bg-background" : "bg-transparent"}
+                      />
+                    )
+                  })}
+                </div>
+              )}
               {connecting && (
                 <div className="absolute inset-0 grid place-items-center rounded-md bg-card/80">
                   <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />

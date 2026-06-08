@@ -13,16 +13,53 @@ This repository is linked to a [v0](https://v0.app) project. You can continue de
 First, run the development server:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
 pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+
+## Prospecção
+
+Backend real isolado para o Painel de Prospecção da Central Play Plus.
+
+Variáveis seguras obrigatórias:
+
+```bash
+PROSPECTION_DRY_RUN=true
+PROSPECTION_ENABLED=false
+EVOLUTION_PROSPECTION_INSTANCE=centralplay-leads
+```
+
+Endpoints principais:
+
+- `GET /api/prospection/status`
+- `POST /api/prospection/upload`
+- `GET /api/prospection/leads`
+- `GET /api/prospection/queue`
+- `POST /api/prospection/campaigns`
+- `POST /api/prospection/campaigns/:id/start`
+- `POST /api/prospection/campaigns/:id/pause`
+- `GET /api/prospection/templates`
+- `GET /api/prospection/whatsapp/status`
+- `POST /api/prospection/whatsapp/qr`
+- `POST /api/prospection/send-next`
+- `POST /api/prospection/webhook`
+
+Worker:
+
+```bash
+node scripts/prospection-worker.mjs
+```
+
+Migração SQL das tabelas novas:
+
+```bash
+supabase/migrations/20260608_001_create_prospection_tables.sql
+```
+
+Sem credencial SQL/Postgres direta, o app usa `storage/prospection-db.json` como store local de validação dry-run. Esse arquivo é ignorado no git.
 
 ## Learn More
 

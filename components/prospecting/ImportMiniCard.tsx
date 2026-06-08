@@ -3,20 +3,29 @@
 import { useRef, useState } from "react"
 
 interface Props {
-  onConfirmImport: () => void
+  onConfirmImport: (file: File) => Promise<{
+    imported: number
+    valid: number
+    queued: number
+    duplicates: number
+    invalid: number
+    optOutIgnored: number
+  } | null>
 }
 
 export function ImportMiniCard({ onConfirmImport }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const [fileName, setFileName] = useState<string | null>("leads-novembro.xlsx")
-  const [count] = useState(142)
+  const [file, setFile] = useState<File | null>(null)
+  const [summary, setSummary] = useState<Awaited<ReturnType<Props["onConfirmImport"]>>>(null)
   const [confirmed, setConfirmed] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   const handlePick = () => inputRef.current?.click()
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (f) {
-      setFileName(f.name)
+      setFile(f)
+      setSummary(null)
       setConfirmed(false)
     }
   }
@@ -49,33 +58,45 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-xs font-medium text-foreground">
-              {fileName ?? "Selecionar planilha Excel"}
+              {file?.name ?? "Selecionar planilha Excel"}
             </span>
             <span className="text-[10px] text-muted-foreground">
-              {fileName ? "Toque para trocar" : ".xlsx, .xls ou .csv"}
+              {file ? "Toque para trocar" : ".xlsx, .xls ou .csv"}
             </span>
           </span>
-          {fileName && (
+          {summary && (
             <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-foreground">
-              {count} leads
+              {summary.queued} fila
             </span>
           )}
         </button>
+        {summary && (
+          <div className="grid grid-cols-4 gap-1 text-center text-[10px]">
+            <span className="rounded bg-secondary px-1 py-1 text-foreground">{summary.valid} validos</span>
+            <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.duplicates} dup.</span>
+            <span className="rounded bg-secondary px-1 py-1 text-destructive">{summary.invalid} inval.</span>
+            <span className="rounded bg-secondary px-1 py-1 text-[var(--warning)]">{summary.optOutIgnored} opt-out</span>
+          </div>
+        )}
       </div>
 
       <button
-        onClick={() => {
+        onClick={async () => {
+          if (!file) return
+          setLoading(true)
+          const result = await onConfirmImport(file)
+          setSummary(result)
           setConfirmed(true)
-          onConfirmImport()
+          setLoading(false)
         }}
-        disabled={!fileName}
+        disabled={!file || loading}
         className={`mt-2 w-full rounded-md py-1.5 text-[11px] font-medium transition-colors ${
           confirmed
             ? "bg-[var(--success)]/15 text-[var(--success)]"
             : "bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
         }`}
       >
-        {confirmed ? "Importação confirmada" : "Confirmar importação"}
+        {loading ? "Importando..." : confirmed ? "Importação confirmada" : "Confirmar importação"}
       </button>
     </section>
   )
