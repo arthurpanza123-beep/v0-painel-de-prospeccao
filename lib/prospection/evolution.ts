@@ -1,5 +1,6 @@
 import { getProspectionConfig } from './config'
 import { maskPhone, normalizePhone } from './phone'
+import QRCode from 'qrcode'
 
 function headers(apiKey: string) {
   return {
@@ -64,11 +65,53 @@ function instanceName(item: unknown) {
   return String(instance.instanceName || instance.name || '').trim()
 }
 
-function pickQr(data: unknown) {
+function pickTextQrCode(data: unknown) {
   const root = data && typeof data === 'object' ? data as Record<string, unknown> : {}
-  const base64 = String(root.base64 || root.qrcode || root.qr || root.code || (root.instance as Record<string, unknown> | undefined)?.qrcode || '')
-  if (!base64) return null
-  return base64.startsWith('data:image') ? base64 : `data:image/png;base64,${base64.replace(/^data:image\/png;base64,/, '')}`
+  return String(root.code || root.pairingCode || (root.instance as Record<string, unknown> | undefined)?.code || '').trim()
+}
+
+async function pickQr(data: unknown) {
+  const root = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  const instance = root.instance && typeof root.instance === 'object' ? root.instance as Record<string, unknown> : {}
+  const imageValue = String(root.base64 || root.qrcode || root.qr || instance.qrcode || '')
+  if (imageValue) {
+    const qrCode = imageValue.startsWith('data:image') ? imageValue : `data:image/png;base64,${imageValue.replace(/^data:image\/png;base64,/, '')}`
+    return {
+      qrCode,
+      source: imageValue.startsWith('data:image') ? 'evolution_data_url' : 'evolution_base64',
+      length: qrCode.length,
+    }
+  }
+  const textCode = pickTextQrCode(data)
+  if (!textCode) return { qrCode: null, source: 'missing', length: 0 }
+  const qrCode = await QRCode.toDataURL(textCode, {
+    type: 'image/png',
+    width: 720,
+    margin: 4,
+    color: {
+      dark: '#000000',
+      light: '#ffffff',
+    },
+    errorCorrectionLevel: 'M',
+  })
+  return { qrCode, source: 'generated_from_code', length: qrCode.length }
+}
+
+async function findProspectionInstance() {
+  const config = getProspectionConfig()
+  const result = await evolutionFetch('/instance/fetchInstances')
+  if (!result.ok) return null
+  return extractInstances(result.data).find((item) => instanceName(item) === config.evolutionInstance) || null
+}
+
+function instanceDetails(item: unknown) {
+  const root = item && typeof item === 'object' ? item as Record<string, unknown> : {}
+  const number = String(root.number || root.ownerJid || '').replace(/\D/g, '')
+  return {
+    number: number || null,
+    profileName: root.profileName ? String(root.profileName) : null,
+    connectionStatus: root.connectionStatus ? String(root.connectionStatus) : null,
+  }
 }
 
 async function configureProspectionWebhook() {
@@ -121,11 +164,15 @@ async function ensureProspectionInstance() {
 
 export async function getWhatsappStatus() {
   const config = getProspectionConfig()
-  const result = await evolutionFetch(`/instance/connectionState/${encodeURIComponent(config.evolutionInstance)}`)
+  const [result, foundInstance] = await Promise.all([
+    evolutionFetch(`/instance/connectionState/${encodeURIComponent(config.evolutionInstance)}`),
+    findProspectionInstance(),
+  ])
   const stateData = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {}
   const state = String(stateData.state || (stateData.instance as Record<string, unknown> | undefined)?.state || '').toLowerCase()
   const connected = ['open', 'connected', 'online'].includes(state)
   const missing = result.status === 404 || result.code === 'EVOLUTION_INSTANCE_MISSING'
+  const details = foundInstance ? instanceDetails(foundInstance) : { number: null, profileName: null, connectionStatus: null }
   return {
     ok: result.ok || missing,
     configured: result.configured,
@@ -134,6 +181,9 @@ export async function getWhatsappStatus() {
     state,
     code: missing ? 'EVOLUTION_INSTANCE_MISSING' : result.code,
     message: missing ? 'Instancia de prospecção ainda nao foi criada na Evolution.' : undefined,
+    number: details.number,
+    profileName: details.profileName,
+    connectionStatus: details.connectionStatus,
   }
 }
 
@@ -163,11 +213,17 @@ export async function requestWhatsappQr() {
       message: 'Instancia de prospecção nao encontrada na Evolution.',
     }
   }
+  const qr = await pickQr(result.data)
+  const root = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {}
   return {
     ok: result.ok,
     configured: result.configured,
     instance: config.evolutionInstance,
-    qrCode: pickQr(result.data),
+    qrCode: qr.qrCode,
+    qrSource: qr.source,
+    qrLength: qr.length,
+    qrUpdatedAt: new Date().toISOString(),
+    qrExpiresInSeconds: typeof root.count === 'number' ? root.count : null,
     code: result.code,
   }
 }

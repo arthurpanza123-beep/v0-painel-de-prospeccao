@@ -29,7 +29,14 @@ type ApiStatus = {
     optOut: number
     proximoEnvio: number | null
   }
-  whatsapp?: { status?: string }
+  whatsapp?: {
+    status?: string
+    state?: string
+    connectionStatus?: string | null
+    instance?: string
+    number?: string | null
+    profileName?: string | null
+  }
   activeCampaign?: { id: string; status: string } | null
   queue?: {
     current: ApiLead | null
@@ -84,6 +91,10 @@ export default function ProspectingPage() {
   const [queue, setQueue] = useState<{ current: Lead | null; upNext: Lead[]; lastSent: Lead | null }>({ current: null, upNext: [], lastSent: null })
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null)
   const [qrCode, setQrCode] = useState<string | null>(null)
+  const [qrUpdatedAt, setQrUpdatedAt] = useState<string | null>(null)
+  const [qrRequestState, setQrRequestState] = useState<"idle" | "loading" | "done">("idle")
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  const [whatsappMeta, setWhatsappMeta] = useState<{ instance?: string; number?: string | null; profileName?: string | null }>({})
 
   const isRunning = campaignStatus === "rodando"
   const isPaused = campaignStatus === "pausada"
@@ -101,7 +112,24 @@ export default function ProspectingPage() {
       optOut: statusRes.stats?.optOut || 0,
       proximoEnvio: formatCountdown(statusRes.stats?.proximoEnvio),
     })
-    setWhatsappStatus(statusRes.whatsapp?.status === "connected" ? "conectado" : "desconectado")
+    const rawWhatsappStatus = String(statusRes.whatsapp?.status || "")
+    const rawWhatsappState = String(statusRes.whatsapp?.state || statusRes.whatsapp?.connectionStatus || "")
+    const nextWhatsappStatus =
+      rawWhatsappStatus === "connected"
+        ? "conectado"
+        : rawWhatsappState === "connecting" || rawWhatsappStatus === "connecting"
+        ? "conectando"
+        : "desconectado"
+    setWhatsappStatus(nextWhatsappStatus)
+    setWhatsappMeta({
+      instance: statusRes.whatsapp?.instance || "centralplay-leads",
+      number: statusRes.whatsapp?.number || null,
+      profileName: statusRes.whatsapp?.profileName || null,
+    })
+    if (nextWhatsappStatus === "conectado") {
+      setQrCode(null)
+      setQrUpdatedAt(null)
+    }
     setActiveCampaignId(statusRes.activeCampaign?.id || null)
     setCampaignStatus(
       statusRes.activeCampaign?.status === "running"
@@ -126,9 +154,16 @@ export default function ProspectingPage() {
 
   useEffect(() => {
     void refresh()
-    const timer = setInterval(() => void refresh(), 10000)
+    const timer = setInterval(() => void refresh(), whatsappStatus === "conectado" ? 10000 : 5000)
     return () => clearInterval(timer)
-  }, [refresh])
+  }, [refresh, whatsappStatus])
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const qrAgeSeconds = qrUpdatedAt ? Math.max(0, Math.floor((nowMs - new Date(qrUpdatedAt).getTime()) / 1000)) : null
 
   const ensureCampaign = async () => {
     if (activeCampaignId) return activeCampaignId
@@ -150,16 +185,26 @@ export default function ProspectingPage() {
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/pause`, { method: "POST" })
     await refresh()
   }
-  const handleConfigureWhatsApp = async () => {
+  const handleConfigureWhatsApp = useCallback(async () => {
+    setQrRequestState("loading")
     setWhatsappStatus("conectando")
-    const response = await fetch("/api/prospection/whatsapp/qr", { method: "POST" })
-    const payload = await response.json()
-    setQrCode(payload.qrCode || null)
-    setWhatsappStatus("desconectado")
-  }
+    try {
+      const response = await fetch("/api/prospection/whatsapp/qr", { method: "POST" })
+      const payload = await response.json()
+      setQrCode(payload.qrCode || null)
+      setQrUpdatedAt(payload.qrUpdatedAt || new Date().toISOString())
+      setWhatsappStatus("conectando")
+    } finally {
+      setQrRequestState("done")
+    }
+  }, [])
   const handleRefreshQR = () => {
     void handleConfigureWhatsApp()
   }
+
+  useEffect(() => {
+    if (whatsappStatus !== "conectado" && !qrCode && qrRequestState === "idle") void handleConfigureWhatsApp()
+  }, [handleConfigureWhatsApp, qrCode, qrRequestState, whatsappStatus])
   const handleConfirmImport = async (file: File) => {
     const form = new FormData()
     form.append("file", file)
@@ -266,9 +311,17 @@ export default function ProspectingPage() {
         <MetricsBar stats={stats} />
 
         {/* DESKTOP: grid de blocos */}
-        <div className="hidden flex-1 grid-rows-[minmax(0,0.78fr)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid">
+        <div className="hidden flex-1 grid-rows-[minmax(0,0.95fr)_minmax(0,0.85fr)] gap-3 overflow-hidden lg:grid">
           <div className="grid grid-cols-3 gap-3 overflow-hidden">
-            <WhatsAppMiniCard status={whatsappStatus} qrCode={qrCode} onRefreshQR={handleRefreshQR} />
+            <WhatsAppMiniCard
+              status={whatsappStatus}
+              qrCode={qrCode}
+              qrAgeSeconds={qrAgeSeconds}
+              instanceName={whatsappMeta.instance || "centralplay-leads"}
+              connectedNumber={whatsappMeta.number}
+              profileName={whatsappMeta.profileName}
+              onRefreshQR={handleRefreshQR}
+            />
             <ImportMiniCard onConfirmImport={handleConfirmImport} />
             <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
           </div>
@@ -288,7 +341,15 @@ export default function ProspectingPage() {
         <div className="flex flex-1 flex-col overflow-hidden lg:hidden">
           <div className="flex-1 overflow-hidden">
             {mobileTab === "whatsapp" && (
-              <WhatsAppMiniCard status={whatsappStatus} qrCode={qrCode} onRefreshQR={handleRefreshQR} />
+              <WhatsAppMiniCard
+                status={whatsappStatus}
+                qrCode={qrCode}
+                qrAgeSeconds={qrAgeSeconds}
+                instanceName={whatsappMeta.instance || "centralplay-leads"}
+                connectedNumber={whatsappMeta.number}
+                profileName={whatsappMeta.profileName}
+                onRefreshQR={handleRefreshQR}
+              />
             )}
             {mobileTab === "importar" && (
               <ImportMiniCard onConfirmImport={handleConfirmImport} />
