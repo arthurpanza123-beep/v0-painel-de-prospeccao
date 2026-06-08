@@ -35,29 +35,33 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
         onChange={handleFile}
       />
 
-      <button
-        onClick={handlePick}
-        className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-[oklch(0.16_0.011_243)] px-2 py-3 text-center transition-colors hover:border-primary/50"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="text-muted-foreground" aria-hidden="true">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-        {fileName ? (
-          <span className="max-w-full truncate text-[11px] font-medium text-foreground">
-            {fileName}
+      <div className="flex flex-1 flex-col justify-center gap-2">
+        {/* Linha do arquivo */}
+        <button
+          onClick={handlePick}
+          className="flex w-full items-center gap-2.5 rounded-md border border-border bg-[oklch(0.16_0.011_243)] px-2.5 py-2 text-left transition-colors hover:border-primary/50"
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[var(--success)]/15">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--success)]" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
           </span>
-        ) : (
-          <span className="text-[11px] text-muted-foreground">Enviar planilha Excel</span>
-        )}
-      </button>
-
-      {fileName && (
-        <p className="mt-2 text-center text-[11px] text-muted-foreground">
-          <span className="font-semibold text-foreground tabular-nums">{count}</span> leads detectados
-        </p>
-      )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-medium text-foreground">
+              {fileName ?? "Selecionar planilha Excel"}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {fileName ? "Toque para trocar" : ".xlsx, .xls ou .csv"}
+            </span>
+          </span>
+          {fileName && (
+            <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-foreground">
+              {count} leads
+            </span>
+          )}
+        </button>
+      </div>
 
       <button
         onClick={() => {

@@ -22,37 +22,43 @@ export function RateMiniCard({ initialRate, onSave }: Props) {
     label: string,
     value: string | number,
     onChange: (v: string) => void,
+    suffix?: string,
   ) => (
-    <label className="flex flex-col gap-0.5">
-      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+    <label className="flex flex-col gap-1">
+      <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded border border-input bg-[oklch(0.16_0.011_243)] px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-      />
+      <div className="flex items-center rounded-md border border-input bg-[oklch(0.16_0.011_243)] focus-within:border-primary focus-within:ring-1 focus-within:ring-primary">
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full bg-transparent px-2.5 py-1.5 text-xs font-medium text-foreground outline-none"
+        />
+        {suffix && (
+          <span className="pr-2.5 text-[10px] text-muted-foreground">{suffix}</span>
+        )}
+      </div>
     </label>
   )
 
   return (
     <section className="flex h-full flex-col rounded-lg border border-border bg-card p-3">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <h2 className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Ritmo de envio
       </h2>
 
-      <div className="grid flex-1 grid-cols-2 gap-2 content-start">
+      <div className="grid flex-1 grid-cols-2 gap-2.5 content-start">
         {field("Lote", rate.limitePorLote, (v) =>
-          update({ limitePorLote: Number(v) || 0 }),
+          update({ limitePorLote: Number(v) || 0 }), "msgs",
         )}
-        {field("Janela (min)", rate.janelaMinutos, (v) =>
-          update({ janelaMinutos: Number(v) || 0 }),
+        {field("Janela", rate.janelaMinutos, (v) =>
+          update({ janelaMinutos: Number(v) || 0 }), "min",
         )}
-        {field("Interv. mín", rate.intervaloMinMin, (v) =>
-          update({ intervaloMinMin: v }),
+        {field("Intervalo mín", rate.intervaloMinMin, (v) =>
+          update({ intervaloMinMin: v }), "s",
         )}
-        {field("Interv. máx", rate.intervaloMaxMin, (v) =>
-          update({ intervaloMaxMin: v }),
+        {field("Intervalo máx", rate.intervaloMaxMin, (v) =>
+          update({ intervaloMaxMin: v }), "s",
         )}
         {showMore && (
           <>
@@ -64,7 +70,7 @@ export function RateMiniCard({ initialRate, onSave }: Props) {
         )}
       </div>
 
-      <div className="mt-2 flex items-center gap-2">
+      <div className="mt-2.5 flex items-center gap-2">
         <button
           onClick={() => setShowMore((s) => !s)}
           className="rounded px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
@@ -76,13 +82,13 @@ export function RateMiniCard({ initialRate, onSave }: Props) {
             setSaved(true)
             onSave(rate)
           }}
-          className={`ml-auto rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors ${
+          className={`ml-auto rounded-md px-3.5 py-1.5 text-[11px] font-semibold transition-colors ${
             saved
               ? "bg-[var(--success)]/15 text-[var(--success)]"
-              : "bg-secondary text-foreground hover:bg-muted"
+              : "bg-primary text-primary-foreground hover:bg-primary/90"
           }`}
         >
-          {saved ? "Salvo" : "Salvar ritmo"}
+          {saved ? "Ritmo salvo" : "Salvar ritmo"}
         </button>
       </div>
     </section>

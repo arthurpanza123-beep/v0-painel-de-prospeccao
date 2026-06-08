@@ -25,24 +25,51 @@ export function QueueMiniCard({ current, upNext, lastSent, isRunning, onViewHist
         </button>
       </div>
 
-      <div className="flex flex-1 flex-col gap-2">
-        {/* Enviando agora */}
-        <div className="rounded-md border border-primary/30 bg-primary/10 px-2.5 py-1.5">
-          <p className="text-[9px] font-medium uppercase tracking-wide text-primary/80">
-            Enviando agora
-          </p>
-          <div className="mt-0.5 flex items-center gap-1.5">
+      <div className="flex flex-1 flex-col gap-2.5">
+        {/* Enviando agora — destaque principal */}
+        <div
+          className={`rounded-lg border px-3 py-2.5 transition-colors ${
+            isRunning && current
+              ? "border-primary/40 bg-primary/10"
+              : "border-border bg-[oklch(0.16_0.011_243)]"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Enviando agora
+            </p>
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                isRunning && current
+                  ? "bg-primary/20 text-primary"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {isRunning && current ? "Enviando" : "Parado"}
+            </span>
+          </div>
+          <div className="mt-1.5 flex items-center gap-2">
             {isRunning && current ? (
               <>
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary animate-pulse" />
-                <span className="truncate text-xs font-semibold text-foreground">
+                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+                </span>
+                <span className="truncate text-base font-bold text-foreground">
                   {current.nome}
                 </span>
               </>
             ) : (
-              <span className="text-xs text-muted-foreground">Campanha parada</span>
+              <span className="text-sm font-medium text-muted-foreground">
+                Campanha parada
+              </span>
             )}
           </div>
+          {isRunning && current?.telefone && (
+            <p className="mt-0.5 truncate pl-[18px] font-mono text-[10px] text-muted-foreground">
+              {current.telefone}
+            </p>
+          )}
         </div>
 
         {/* Próximos */}
@@ -54,7 +81,7 @@ export function QueueMiniCard({ current, upNext, lastSent, isRunning, onViewHist
             {upNext.slice(0, 3).map((l) => (
               <li
                 key={l.id}
-                className="flex items-center justify-between rounded bg-secondary px-2 py-1"
+                className="flex items-center justify-between rounded bg-secondary px-2 py-1.5"
               >
                 <span className="truncate text-[11px] text-foreground">{l.nome}</span>
                 {l.proximoEnvio && (

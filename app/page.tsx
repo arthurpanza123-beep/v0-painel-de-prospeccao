@@ -113,13 +113,22 @@ export default function ProspectingPage() {
             )}
             <button
               onClick={handleToggleCampaign}
-              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+              className={`rounded-md px-3.5 py-1.5 text-[11px] font-semibold transition-colors ${
                 isRunning
                   ? "bg-secondary text-foreground hover:bg-muted"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90"
+                  : "bg-primary text-primary-foreground shadow-[0_0_0_1px_var(--primary)] shadow-primary/30 hover:bg-primary/90"
               }`}
             >
-              {isRunning ? "Em andamento" : isPaused ? "Retomar" : "Iniciar campanha"}
+              {isRunning ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
+                  Em andamento
+                </span>
+              ) : isPaused ? (
+                "Retomar"
+              ) : (
+                "Iniciar campanha"
+              )}
             </button>
           </div>
         </div>
@@ -130,7 +139,7 @@ export default function ProspectingPage() {
         <MetricsBar stats={mockCampaignStats} />
 
         {/* DESKTOP: grid de blocos */}
-        <div className="hidden flex-1 grid-rows-[1fr_1fr] gap-3 overflow-hidden lg:grid">
+        <div className="hidden flex-1 grid-rows-[minmax(0,0.78fr)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid">
           <div className="grid grid-cols-3 gap-3 overflow-hidden">
             <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
             <ImportMiniCard onConfirmImport={handleConfirmImport} />
