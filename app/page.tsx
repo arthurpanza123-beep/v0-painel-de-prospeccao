@@ -17,6 +17,16 @@ import {
 } from "@/lib/mock-data"
 
 type MobileTab = "whatsapp" | "importar" | "ritmo" | "mensagem" | "fila"
+type OperationalStatus = "no_campaign" | "draft" | "ready" | "running_dry_run" | "paused" | "waiting_for_leads" | "completed" | "cancelled" | "error"
+
+type ConfirmDialog = {
+  title: string
+  text: string
+  cancelLabel: string
+  confirmLabel: string
+  tone?: "primary" | "danger"
+  resolve: (confirmed: boolean) => void
+}
 
 type ApiStatus = {
   stats?: {
@@ -27,6 +37,15 @@ type ApiStatus = {
     optOut: number
     proximoEnvio: number | null
   }
+  campaign_status?: OperationalStatus
+  next_send_at?: string | null
+  next_send_in_seconds?: number | null
+  next_send_display?: string
+  current_time_server?: string
+  queue_count?: number
+  is_paused?: boolean
+  is_dry_run?: boolean
+  real_sending_allowed?: boolean
   whatsapp?: {
     status?: string
     state?: string
@@ -69,6 +88,14 @@ const formatCountdown = (seconds?: number | null) => {
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
 }
 
+const formatHumanCountdown = (seconds?: number | null) => {
+  if (seconds == null) return "Calculando..."
+  if (seconds <= 0) return "Aguardando worker..."
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return minutes > 0 ? `${minutes}min ${String(rest).padStart(2, "0")}s` : `${rest}s`
+}
+
 const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | null => {
   if (!lead) return null
   return {
@@ -80,14 +107,14 @@ const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | n
     uf: lead.uf || "",
     status: fallbackStatus,
     templateIndex: Math.max(0, (lead.template_id || 1) - 1),
-    proximoEnvio: lead.scheduled_at || lead.created_at ? new Date(lead.scheduled_at || lead.created_at || "").toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : undefined,
+    proximoEnvio: lead.scheduled_at ? new Date(lead.scheduled_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : undefined,
     enviadoEm: lead.sent_at ? new Date(lead.sent_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : undefined,
   }
 }
 
 export default function ProspectingPage() {
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
-  const [campaignStatus, setCampaignStatus] = useState("none")
+  const [campaignStatus, setCampaignStatus] = useState<OperationalStatus>("no_campaign")
   const [sendingRate, setSendingRate] = useState(mockSendingRate)
   const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
   const [stats, setStats] = useState({ leadsImportados: 0, naFila: 0, enviadosHoje: 0, responderam: 0, optOut: 0, proximoEnvio: "--:--" })
@@ -101,25 +128,72 @@ export default function ProspectingPage() {
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [whatsappMeta, setWhatsappMeta] = useState<{ instance?: string; number?: string | null; profileName?: string | null }>({})
   const [safetyFlags, setSafetyFlags] = useState({ dryRun: true, enabled: false, realSendingAllowed: false })
+  const [runtime, setRuntime] = useState({
+    nextSendAt: null as string | null,
+    serverNowMs: Date.now(),
+    receivedAtMs: Date.now(),
+    nextSendDisplay: "Sem campanha",
+    queueCount: 0,
+    isDryRun: true,
+    realSendingAllowed: false,
+  })
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null)
 
-  const isRunning = campaignStatus === "running"
+  const isRunning = campaignStatus === "running_dry_run"
   const isPaused = campaignStatus === "paused"
   const hasLeadsQueued = stats.naFila > 0
-  const simulationBlocked = safetyFlags.dryRun || !safetyFlags.enabled || !safetyFlags.realSendingAllowed
-  const campaignLabel = !activeCampaignId
+  const campaignLabel = campaignStatus === "no_campaign"
     ? "Sem campanha"
-    : campaignStatus === "draft"
-    ? hasLeadsQueued ? "Pronta para iniciar" : "Rascunho / fila vazia"
-    : campaignStatus === "running"
-    ? simulationBlocked ? "Simulação / Dry-run" : "Rodando"
+    : campaignStatus === "ready"
+    ? "Pronta"
+    : campaignStatus === "running_dry_run"
+    ? "Simulação ativa"
     : campaignStatus === "paused"
     ? "Pausada"
+    : campaignStatus === "waiting_for_leads"
+    ? "Fila vazia"
     : campaignStatus === "completed"
     ? "Finalizada"
     : campaignStatus === "cancelled"
     ? "Cancelada"
-    : "Sem campanha"
-  const queueEmptyLabel = !activeCampaignId ? "Nenhuma campanha ativa" : hasLeadsQueued ? "Aguardando proximo envio" : "Fila vazia"
+    : "Rascunho"
+  const queueEmptyLabel = campaignStatus === "paused" ? "Campanha pausada" : campaignStatus === "waiting_for_leads" ? "Nenhum lead na fila" : campaignStatus === "ready" ? "Aguardando início" : "Fila vazia"
+  const nextLeadName = queue.current?.nome || queue.upNext[0]?.nome || ""
+  const localServerNowMs = runtime.serverNowMs + (nowMs - runtime.receivedAtMs)
+  const nextSendSeconds = runtime.nextSendAt && isRunning
+    ? Math.max(0, Math.ceil((new Date(runtime.nextSendAt).getTime() - localServerNowMs) / 1000))
+    : null
+  const nextSendHeadline = isRunning
+    ? queue.current
+      ? "Processando..."
+      : nextSendSeconds == null
+      ? "Calculando..."
+      : nextSendSeconds === 0
+      ? "Aguardando worker..."
+      : formatCountdown(nextSendSeconds)
+    : runtime.nextSendDisplay
+  const nextSendDetail = isRunning && nextLeadName
+    ? `${nextLeadName} · simulação`
+    : isPaused && nextLeadName
+    ? `${nextLeadName} · próximo ao retomar`
+    : campaignStatus === "ready" && nextLeadName
+    ? `${nextLeadName} · pronta para simulação`
+    : runtime.isDryRun
+    ? "Modo seguro"
+    : "Envio real"
+  const nextSendQueueLabel = isRunning ? formatHumanCountdown(nextSendSeconds) : runtime.nextSendDisplay
+
+  const askConfirmation = useCallback((config: Omit<ConfirmDialog, "resolve">) => (
+    new Promise<boolean>((resolve) => {
+      setConfirmDialog({ ...config, resolve })
+    })
+  ), [])
+
+  const closeConfirmation = (confirmed: boolean) => {
+    const dialog = confirmDialog
+    setConfirmDialog(null)
+    dialog?.resolve(confirmed)
+  }
 
   const refresh = useCallback(async () => {
     const [statusRes, templatesRes] = await Promise.all([
@@ -132,7 +206,7 @@ export default function ProspectingPage() {
       enviadosHoje: statusRes.stats?.enviadosHoje || 0,
       responderam: statusRes.stats?.responderam || 0,
       optOut: statusRes.stats?.optOut || 0,
-      proximoEnvio: formatCountdown(statusRes.stats?.proximoEnvio),
+      proximoEnvio: statusRes.next_send_display || formatCountdown(statusRes.stats?.proximoEnvio),
     })
     const rawWhatsappStatus = String(statusRes.whatsapp?.status || "")
     const rawWhatsappState = String(statusRes.whatsapp?.state || statusRes.whatsapp?.connectionStatus || "")
@@ -154,8 +228,17 @@ export default function ProspectingPage() {
     }
     setActiveCampaignId(statusRes.activeCampaign?.id || null)
     setActiveCampaignName(statusRes.activeCampaign?.name || null)
-    setCampaignStatus(statusRes.activeCampaign?.status || "none")
+    setCampaignStatus(statusRes.campaign_status || "no_campaign")
     setSafetyFlags(statusRes.flags || { dryRun: true, enabled: false, realSendingAllowed: false })
+    setRuntime({
+      nextSendAt: statusRes.next_send_at || null,
+      serverNowMs: statusRes.current_time_server ? new Date(statusRes.current_time_server).getTime() : Date.now(),
+      receivedAtMs: Date.now(),
+      nextSendDisplay: statusRes.next_send_display || "Sem campanha",
+      queueCount: statusRes.queue_count || 0,
+      isDryRun: statusRes.is_dry_run ?? true,
+      realSendingAllowed: statusRes.real_sending_allowed ?? false,
+    })
     setQueue({
       current: mapLead(statusRes.queue?.current || null, "enviando"),
       upNext: (statusRes.queue?.upcoming || []).map((lead) => mapLead(lead, "aguardando")).filter(Boolean) as Lead[],
@@ -182,26 +265,38 @@ export default function ProspectingPage() {
   const qrAgeSeconds = qrUpdatedAt ? Math.max(0, Math.floor((nowMs - new Date(qrUpdatedAt).getTime()) / 1000)) : null
 
   const ensureCampaign = async () => {
-    if (activeCampaignId && !["completed", "cancelled"].includes(campaignStatus)) return activeCampaignId
+    if (activeCampaignId && !["completed", "cancelled", "no_campaign"].includes(campaignStatus)) return activeCampaignId
     const response = await fetch("/api/prospection/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `Campanha ${new Date().toLocaleString("pt-BR")}` }) })
     const payload = await response.json()
     const id = payload.campaign?.id
     setActiveCampaignId(id)
     setActiveCampaignName(payload.campaign?.name || null)
-    setCampaignStatus(payload.campaign?.status || "draft")
+    setCampaignStatus("draft")
     return id
   }
 
   const handleNewCampaign = async () => {
+    if (!(await askConfirmation({
+      title: "Criar nova campanha limpa?",
+      text: "Isso não apaga histórico antigo, apenas inicia uma nova campanha separada.",
+      cancelLabel: "Voltar",
+      confirmLabel: "Criar nova",
+    }))) return
     const response = await fetch("/api/prospection/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `Campanha ${new Date().toLocaleString("pt-BR")}` }) })
     const payload = await response.json()
     setActiveCampaignId(payload.campaign?.id || null)
     setActiveCampaignName(payload.campaign?.name || null)
-    setCampaignStatus(payload.campaign?.status || "draft")
+    setCampaignStatus("draft")
     await refresh()
   }
 
   const handleStart = async () => {
+    if (!(await askConfirmation({
+      title: "Iniciar simulação?",
+      text: "A campanha vai processar a fila em modo seguro. Nenhum WhatsApp real será enviado enquanto o envio real estiver bloqueado.",
+      cancelLabel: "Cancelar",
+      confirmLabel: "Iniciar simulação",
+    }))) return
     const id = await ensureCampaign()
     if (!id) return
     await fetch(`/api/prospection/campaigns/${id}/start`, { method: "POST" })
@@ -209,19 +304,47 @@ export default function ProspectingPage() {
   }
   const handlePause = async () => {
     if (!activeCampaignId) return
+    if (!(await askConfirmation({
+      title: "Pausar campanha?",
+      text: "Os envios serão interrompidos até você retomar.",
+      cancelLabel: "Cancelar",
+      confirmLabel: "Pausar",
+    }))) return
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/pause`, { method: "POST" })
     await refresh()
   }
   const handleResume = async () => {
     if (!activeCampaignId) return
+    if (!(await askConfirmation({
+      title: "Retomar campanha?",
+      text: "A fila continuará a partir do próximo lead disponível.",
+      cancelLabel: "Cancelar",
+      confirmLabel: "Retomar",
+    }))) return
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/resume`, { method: "POST" })
     await refresh()
   }
   const handleCancel = async () => {
     if (!activeCampaignId) return
+    if (!(await askConfirmation({
+      title: "Cancelar campanha?",
+      text: "A campanha será encerrada. Leads já processados continuarão no histórico.",
+      cancelLabel: "Voltar",
+      confirmLabel: "Cancelar campanha",
+      tone: "danger",
+    }))) return
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/cancel`, { method: "POST" })
     await refresh()
   }
+  const handleImportLeadsAction = () => {
+    setMobileTab("importar")
+  }
+  const confirmTestReimport = useCallback(() => askConfirmation({
+    title: "Reimportar número de operador?",
+    text: "Use isso apenas para testar com número autorizado. Essa ação não deve ser usada para leads comuns.",
+    cancelLabel: "Cancelar",
+    confirmLabel: "Reimportar teste",
+  }), [askConfirmation])
   const handleConfigureWhatsApp = useCallback(async () => {
     setQrRequestState("loading")
     setWhatsappStatus("conectando")
@@ -307,13 +430,12 @@ export default function ProspectingPage() {
 
           {/* Ações */}
           <div className="ml-auto flex items-center gap-1.5">
-            <span className="hidden max-w-[220px] truncate rounded-full bg-secondary px-2 py-1 text-[10px] font-medium text-muted-foreground md:inline-flex">
-              {campaignLabel}
-              {activeCampaignName ? ` · ${activeCampaignName}` : ""}
+            <span title={activeCampaignName || campaignLabel} className="hidden max-w-[220px] truncate rounded-full bg-secondary px-2 py-1 text-[10px] font-medium text-muted-foreground md:inline-flex">
+              Campanha de teste · {campaignLabel}
             </span>
-            {simulationBlocked && (
-              <span className="hidden rounded-full bg-[var(--warning)]/15 px-2 py-1 text-[10px] font-semibold text-[var(--warning)] sm:inline-flex">
-                Dry-run bloqueado para envio real
+            {(runtime.isDryRun || !runtime.realSendingAllowed) && (
+              <span title="Envio real bloqueado" className="hidden rounded-full bg-[var(--warning)]/15 px-2 py-1 text-[10px] font-semibold text-[var(--warning)] sm:inline-flex">
+                Modo seguro
               </span>
             )}
             <button
@@ -326,12 +448,13 @@ export default function ProspectingPage() {
               onClick={handleNewCampaign}
               className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
-              Nova campanha limpa
+              <span className="hidden sm:inline">Nova campanha</span>
+              <span className="sm:hidden">Nova</span>
             </button>
-            {activeCampaignId && !["completed", "cancelled"].includes(campaignStatus) && (
+            {activeCampaignId && ["paused", "ready", "draft", "waiting_for_leads"].includes(campaignStatus) && (
               <button
                 onClick={handleCancel}
-                className="hidden rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
+                className="hidden rounded-md border border-destructive/30 px-2.5 py-1.5 text-[11px] font-medium text-destructive/80 transition-colors hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
               >
                 Cancelar
               </button>
@@ -341,26 +464,43 @@ export default function ProspectingPage() {
                 onClick={handlePause}
                 className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
               >
-                Pausar simulação
+                Pausar
               </button>
             )}
             {!isRunning && (
               <button
-                onClick={isPaused ? handleResume : !activeCampaignId || ["completed", "cancelled"].includes(campaignStatus) ? handleNewCampaign : handleStart}
-                disabled={campaignStatus === "draft" && !hasLeadsQueued}
+                onClick={isPaused ? handleResume : ["no_campaign", "completed", "cancelled"].includes(campaignStatus) ? handleNewCampaign : ["draft", "waiting_for_leads"].includes(campaignStatus) ? handleImportLeadsAction : handleStart}
+                disabled={campaignStatus === "error"}
                 className="rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-foreground shadow-[0_0_0_1px_var(--primary)] shadow-primary/30 transition-colors hover:bg-primary/90 disabled:opacity-40"
               >
-                {!activeCampaignId || ["completed", "cancelled"].includes(campaignStatus)
-                  ? "Nova campanha"
+                {["no_campaign", "completed", "cancelled"].includes(campaignStatus)
+                  ? (
+                    <>
+                      <span className="hidden sm:inline">Nova campanha</span>
+                      <span className="sm:hidden">Nova</span>
+                    </>
+                  )
                   : isPaused
-                  ? "Retomar simulação"
-                  : "Iniciar simulação"}
+                  ? "Retomar"
+                  : ["draft", "waiting_for_leads"].includes(campaignStatus)
+                  ? (
+                    <>
+                      <span className="hidden sm:inline">Importar leads</span>
+                      <span className="sm:hidden">Importar</span>
+                    </>
+                  )
+                  : (
+                    <>
+                      <span className="hidden sm:inline">Iniciar simulação</span>
+                      <span className="sm:hidden">Iniciar</span>
+                    </>
+                  )}
               </button>
             )}
             {isRunning && (
-              <span className="flex items-center gap-1.5 rounded-md bg-secondary px-3.5 py-1.5 text-[11px] font-semibold text-foreground">
+              <span className="hidden items-center gap-1.5 rounded-md bg-secondary px-3.5 py-1.5 text-[11px] font-semibold text-foreground sm:flex">
                 <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
-                Simulação
+                Simulação ativa
               </span>
               )}
           </div>
@@ -369,7 +509,14 @@ export default function ProspectingPage() {
 
       {/* Conteúdo — cabe na viewport */}
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4">
-        <MetricsBar stats={stats} />
+        <MetricsBar
+          stats={stats}
+          nextSend={{
+            value: nextSendHeadline,
+            detail: nextSendDetail,
+            tone: isPaused ? "text-[var(--warning)]" : isRunning ? "text-primary" : "text-[var(--warning)]",
+          }}
+        />
 
         {/* DESKTOP: grid de blocos */}
         <div className="hidden flex-1 grid-rows-[minmax(0,0.95fr)_minmax(0,0.85fr)] gap-3 overflow-hidden lg:grid">
@@ -383,7 +530,7 @@ export default function ProspectingPage() {
               profileName={whatsappMeta.profileName}
               onRefreshQR={handleRefreshQR}
             />
-            <ImportMiniCard onConfirmImport={handleConfirmImport} />
+            <ImportMiniCard onConfirmImport={handleConfirmImport} onConfirmTestReimport={confirmTestReimport} />
             <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
           </div>
           <div className="grid grid-cols-2 gap-3 overflow-hidden">
@@ -392,7 +539,8 @@ export default function ProspectingPage() {
               current={queue.current}
               upNext={queue.upNext}
               lastSent={queue.lastSent}
-              isRunning={isRunning}
+              campaignStatus={campaignStatus}
+              nextSendLabel={nextSendQueueLabel}
               emptyLabel={queueEmptyLabel}
               onViewHistory={handleViewHistory}
             />
@@ -414,7 +562,7 @@ export default function ProspectingPage() {
               />
             )}
             {mobileTab === "importar" && (
-              <ImportMiniCard onConfirmImport={handleConfirmImport} />
+              <ImportMiniCard onConfirmImport={handleConfirmImport} onConfirmTestReimport={confirmTestReimport} />
             )}
             {mobileTab === "ritmo" && (
               <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
@@ -427,7 +575,8 @@ export default function ProspectingPage() {
                 current={queue.current}
                 upNext={queue.upNext}
                 lastSent={queue.lastSent}
-                isRunning={isRunning}
+                campaignStatus={campaignStatus}
+                nextSendLabel={nextSendQueueLabel}
                 emptyLabel={queueEmptyLabel}
                 onViewHistory={handleViewHistory}
               />
@@ -459,6 +608,32 @@ export default function ProspectingPage() {
           </nav>
         </div>
       </main>
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-lg border border-border bg-card p-4 shadow-2xl">
+            <h2 className="text-sm font-semibold text-foreground">{confirmDialog.title}</h2>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{confirmDialog.text}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => closeConfirmation(false)}
+                className="rounded-md border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {confirmDialog.cancelLabel}
+              </button>
+              <button
+                onClick={() => closeConfirmation(true)}
+                className={`rounded-md px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                  confirmDialog.tone === "danger"
+                    ? "bg-destructive/15 text-destructive hover:bg-destructive/20"
+                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                }`}
+              >
+                {confirmDialog.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

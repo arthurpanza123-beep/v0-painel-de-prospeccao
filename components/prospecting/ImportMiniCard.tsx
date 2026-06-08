@@ -16,9 +16,10 @@ interface Props {
     testReimports: number
     details?: Array<{ name: string; phoneE164: string; reason: string; queued: boolean }>
   } | null>
+  onConfirmTestReimport: () => Promise<boolean>
 }
 
-export function ImportMiniCard({ onConfirmImport }: Props) {
+export function ImportMiniCard({ onConfirmImport, onConfirmTestReimport }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [summary, setSummary] = useState<Awaited<ReturnType<Props["onConfirmImport"]>>>(null)
@@ -128,6 +129,7 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
         <button
           onClick={async () => {
             if (!file) return
+            if (!(await onConfirmTestReimport())) return
             setForceLoading(true)
             const result = await onConfirmImport(file, true)
             setSummary(result)
@@ -137,7 +139,7 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
           disabled={!file || forceLoading}
           className="mt-1 w-full rounded-md border border-border py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
         >
-          {forceLoading ? "Reimportando..." : "Reimportar teste autorizado"}
+          {forceLoading ? "Reimportando..." : "Resetar teste autorizado"}
         </button>
       )}
     </section>

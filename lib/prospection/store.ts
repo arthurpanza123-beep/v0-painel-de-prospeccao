@@ -132,20 +132,37 @@ export async function updateCampaignStatus(campaignId: string, status: Prospecti
   return withLock(async (db) => {
     const campaign = db.campaigns.find((item) => item.id === campaignId)
     if (!campaign) throw new Error('Campanha nao encontrada.')
+    const previousStatus = campaign.status
     if (status === 'running' && !db.leads.some((lead) => lead.campaign_id === campaignId && ['queued', 'scheduled', 'sending'].includes(lead.status))) {
       status = 'completed'
     }
     campaign.status = status
     campaign.updated_at = now()
     if (status === 'running') {
-      const firstQueued = db.leads.find((lead) => lead.campaign_id === campaignId && lead.status === 'queued')
-      if (firstQueued && !firstQueued.scheduled_at) {
+      const staleScheduled = db.leads
+        .filter((lead) => lead.campaign_id === campaignId && lead.status === 'scheduled' && (!lead.scheduled_at || new Date(lead.scheduled_at).getTime() <= Date.now()))
+        .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))[0]
+      const firstQueued = staleScheduled || db.leads.find((lead) => lead.campaign_id === campaignId && lead.status === 'queued')
+      if (firstQueued) {
+        const nextAt = new Date(Date.now() + randomDelaySeconds(campaign) * 1000).toISOString()
         firstQueued.status = 'scheduled'
-        firstQueued.scheduled_at = now()
+        firstQueued.scheduled_at = nextAt
         firstQueued.updated_at = now()
+        campaign.next_send_after = nextAt
+        event(db, { campaign_id: campaign.id, lead_id: firstQueued.id, event_type: 'LEAD_SCHEDULED', message: 'Lead agendado para simulacao.', metadata: { nextSendAt: nextAt } })
+        event(db, { campaign_id: campaign.id, event_type: 'NEXT_SEND_RECALCULATED', message: 'Proximo envio recalculado.', metadata: { nextSendAt: nextAt, reason: previousStatus === 'paused' ? 'resume' : 'start' } })
       }
     }
-    event(db, { campaign_id: campaign.id, event_type: `campaign_${status}`, message: `Campanha alterada para ${status}.`, metadata: {} })
+    const eventType = status === 'running'
+      ? getProspectionConfig().dryRun || !getProspectionConfig().enabled ? 'CAMPAIGN_STARTED_DRY_RUN' : 'CAMPAIGN_STARTED'
+      : status === 'paused'
+      ? 'CAMPAIGN_PAUSED'
+      : status === 'cancelled'
+      ? 'CAMPAIGN_CANCELLED'
+      : status === 'completed'
+      ? 'QUEUE_EMPTY'
+      : `CAMPAIGN_${status.toUpperCase()}`
+    event(db, { campaign_id: campaign.id, event_type: eventType, message: `Campanha alterada para ${status}.`, metadata: { previousStatus, status } })
     return campaign
   })
 }
@@ -410,8 +427,8 @@ export async function getStatus(input?: { campaignId?: string }) {
     responded: campaignLeads.filter((lead) => ['responded', 'responded_positive'].includes(lead.status)).length,
     optOut: campaignLeads.filter((lead) => lead.status === 'opt_out').length,
     nextSend: campaignLeads
-      .filter((lead) => ['scheduled', 'queued'].includes(lead.status))
-      .sort((a, b) => String(a.scheduled_at || a.created_at).localeCompare(String(b.scheduled_at || b.created_at)))[0]?.scheduled_at || campaignLeads.find((lead) => ['scheduled', 'queued'].includes(lead.status))?.created_at || null,
+      .filter((lead) => ['scheduled', 'queued'].includes(lead.status) && lead.scheduled_at)
+      .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))[0]?.scheduled_at || activeCampaign.next_send_after || null,
   }
   return { stats, activeCampaign, flags: getProspectionConfig() }
 }
@@ -465,7 +482,7 @@ export async function reserveNextLead() {
         campaign.status = 'completed'
         campaign.next_send_after = null
         campaign.updated_at = now()
-        event(db, { campaign_id: campaign.id, event_type: 'campaign_completed', message: 'Campanha finalizada por fila vazia.', metadata: {} })
+        event(db, { campaign_id: campaign.id, event_type: 'QUEUE_EMPTY', message: 'Campanha finalizada por fila vazia.', metadata: {} })
         return { ok: false, code: 'QUEUE_EMPTY_COMPLETED' as const }
       }
       return { ok: false, code: 'NO_DUE_LEAD' as const }
@@ -482,7 +499,7 @@ export async function reserveNextLead() {
     dueLead.message_preview = renderTemplate(template.body, dueLead.name)
     dueLead.send_attempts += 1
     dueLead.updated_at = now()
-    event(db, { campaign_id: campaign.id, lead_id: dueLead.id, event_type: 'lead_reserved', message: 'Lead reservado para envio.', metadata: { templateId: template.id } })
+    event(db, { campaign_id: campaign.id, lead_id: dueLead.id, event_type: 'LEAD_RESERVED', message: 'Lead reservado para simulacao.', metadata: { templateId: template.id } })
     return { ok: true, campaign, lead: dueLead, template }
   })
 }
@@ -525,14 +542,17 @@ export async function completeSend(input: {
       nextLead.scheduled_at = new Date(Date.now() + randomDelaySeconds(campaign) * 1000).toISOString()
       nextLead.updated_at = timestamp
       campaign.next_send_after = nextLead.scheduled_at
+      event(db, { campaign_id: campaign.id, lead_id: nextLead.id, event_type: 'LEAD_SCHEDULED', message: 'Lead agendado para simulacao.', metadata: { nextSendAt: nextLead.scheduled_at } })
+      event(db, { campaign_id: campaign.id, event_type: 'NEXT_SEND_RECALCULATED', message: 'Proximo envio recalculado.', metadata: { nextSendAt: nextLead.scheduled_at, reason: 'after_send' } })
     } else {
       campaign.next_send_after = null
       if (!db.leads.some((item) => item.campaign_id === campaign.id && ['queued', 'scheduled', 'sending'].includes(item.status))) {
         campaign.status = 'completed'
+        event(db, { campaign_id: campaign.id, event_type: 'QUEUE_EMPTY', message: 'Fila finalizada sem leads pendentes.', metadata: {} })
       }
     }
     campaign.updated_at = timestamp
-    event(db, { campaign_id: campaign.id, lead_id: lead.id, event_type: input.status === 'dry_run' ? 'send_dry_run' : 'send_sent', message: 'Abordagem inicial registrada.', metadata: { messageId: message.id } })
+    event(db, { campaign_id: campaign.id, lead_id: lead.id, event_type: input.status === 'dry_run' ? 'LEAD_DRY_RUN_SENT' : 'LEAD_SENT', message: 'Abordagem inicial registrada.', metadata: { messageId: message.id } })
     return { lead, message, campaign }
   })
 }

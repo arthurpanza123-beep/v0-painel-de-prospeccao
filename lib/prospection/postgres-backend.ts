@@ -172,6 +172,20 @@ function addImportDetail(
   })
 }
 
+function randomDelaySeconds(campaign: ProspectionCampaign) {
+  const min = Math.min(campaign.min_delay_seconds, campaign.max_delay_seconds)
+  const max = Math.max(campaign.min_delay_seconds, campaign.max_delay_seconds)
+  return Math.floor(min + Math.random() * (max - min + 1))
+}
+
+function eventForStatus(status: ProspectionCampaign['status']) {
+  if (status === 'running') return getProspectionConfig().dryRun || !getProspectionConfig().enabled ? 'CAMPAIGN_STARTED_DRY_RUN' : 'CAMPAIGN_STARTED'
+  if (status === 'paused') return 'CAMPAIGN_PAUSED'
+  if (status === 'cancelled') return 'CAMPAIGN_CANCELLED'
+  if (status === 'completed') return 'QUEUE_EMPTY'
+  return `CAMPAIGN_${status.toUpperCase()}`
+}
+
 async function getSelectedCampaign(campaignId?: string) {
   if (campaignId) {
     const rows = await query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [campaignId])
@@ -278,6 +292,9 @@ export async function getOrCreateDraftCampaign() {
 export async function updateCampaignStatus(campaignId: string, status: ProspectionCampaign['status']) {
   await ensureReady()
   return withTx(async (tx) => {
+    const existingRows = await tx.query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1 for update`, [campaignId])
+    const existing = existingRows[0]
+    if (!existing) throw new Error('Campanha nao encontrada.')
     if (status === 'running') {
       const openRows = await tx.query<{ count: string }>(
         `select count(*)::text as count
@@ -294,15 +311,42 @@ export async function updateCampaignStatus(campaignId: string, status: Prospecti
     const campaign = rows[0]
     if (!campaign) throw new Error('Campanha nao encontrada.')
     if (status === 'running') {
-      const queued = await tx.query<{ id: string }>(
-        `select id from prospection_leads where campaign_id=$1 and status='queued' order by created_at asc limit 1`,
+      const staleScheduled = await tx.query<{ id: string }>(
+        `select id from prospection_leads
+          where campaign_id=$1 and status='scheduled' and scheduled_at <= now()
+          order by scheduled_at asc limit 1`,
         [campaignId],
       )
-      if (queued[0]) {
-        await tx.query(`update prospection_leads set status='scheduled', scheduled_at=now(), updated_at=now() where id=$1`, [queued[0].id])
+      const queued = staleScheduled[0]
+        ? []
+        : await tx.query<{ id: string }>(
+            `select id from prospection_leads where campaign_id=$1 and status='queued' order by created_at asc limit 1`,
+            [campaignId],
+          )
+      const target = staleScheduled[0] || queued[0]
+      if (target) {
+        const nextAt = new Date(Date.now() + randomDelaySeconds(campaign) * 1000).toISOString()
+        await tx.query(`update prospection_leads set status='scheduled', scheduled_at=$2, updated_at=now() where id=$1`, [target.id, nextAt])
+        await tx.query(`update prospection_campaigns set next_send_after=$2, updated_at=now() where id=$1`, [campaignId, nextAt])
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+           values ($1,$2,'LEAD_SCHEDULED','Lead agendado para simulacao.',$3::jsonb)`,
+          [campaignId, target.id, JSON.stringify({ nextSendAt: nextAt })],
+        )
+        await tx.query(
+          `insert into prospection_events (campaign_id,event_type,message,metadata)
+           values ($1,'NEXT_SEND_RECALCULATED','Proximo envio recalculado.',$2::jsonb)`,
+          [campaignId, JSON.stringify({ nextSendAt: nextAt, reason: existing.status === 'paused' ? 'resume' : 'start' })],
+        )
       }
     }
-    return toCampaign(camel(campaign))
+    await tx.query(
+      `insert into prospection_events (campaign_id,event_type,message,metadata)
+       values ($1,$2,$3,$4::jsonb)`,
+      [campaignId, eventForStatus(status), `Campanha alterada para ${status}.`, JSON.stringify({ previousStatus: existing.status, status })],
+    )
+    const freshRows = await tx.query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [campaignId])
+    return toCampaign(camel(freshRows[0] || campaign))
   })
 }
 
@@ -473,7 +517,7 @@ export async function getStatus(input?: { campaignId?: string }) {
         count(*) filter (where sent_at::date = current_date)::text as sent_today,
         count(*) filter (where status in ('responded','responded_positive'))::text as responded,
         count(*) filter (where status = 'opt_out')::text as optout,
-        min(coalesce(scheduled_at, created_at)) filter (where status in ('queued','scheduled'))::text as next_send
+        min(scheduled_at) filter (where status in ('queued','scheduled'))::text as next_send
        from prospection_leads
        where campaign_id=$1`,
       [activeCampaign.id],
@@ -523,6 +567,11 @@ export async function reserveNextLead() {
       )
       if (Number(openRows[0]?.count || 0) === 0) {
         await tx.query(`update prospection_campaigns set status='completed', next_send_after=null, updated_at=now() where id=$1`, [campaign.id])
+        await tx.query(
+          `insert into prospection_events (campaign_id,event_type,message,metadata)
+           values ($1,'QUEUE_EMPTY','Fila finalizada sem leads pendentes.','{}'::jsonb)`,
+          [campaign.id],
+        )
         return { ok: false as const, code: 'QUEUE_EMPTY_COMPLETED' as const }
       }
       return { ok: false as const, code: 'NO_DUE_LEAD' as const }
@@ -533,7 +582,7 @@ export async function reserveNextLead() {
     const preview = renderTemplate(template.body, lead.name)
     const nextScheduledAt = new Date(Date.now() + (campaign.min_delay_seconds + Math.floor(Math.random() * (campaign.max_delay_seconds - campaign.min_delay_seconds + 1))) * 1000).toISOString()
     await tx.query(`update prospection_leads set status='sending', template_id=$2, message_preview=$3, send_attempts=send_attempts+1, updated_at=now() where id=$1`, [lead.id, template.id, preview])
-    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,'lead_reserved','Lead reservado para envio.',$3::jsonb)`, [campaign.id, lead.id, JSON.stringify({ templateId: template.id })])
+    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,'LEAD_RESERVED','Lead reservado para simulacao.',$3::jsonb)`, [campaign.id, lead.id, JSON.stringify({ templateId: template.id })])
     await tx.query(`update prospection_campaigns set next_send_after=$2, updated_at=now() where id=$1`, [campaign.id, nextScheduledAt])
     return { ok: true as const, campaign: toCampaign(camel(campaign)), lead: toLead(camel({ ...lead, template_id: template.id, message_preview: preview, send_attempts: lead.send_attempts + 1, status: 'sending' })), template }
   })
@@ -553,10 +602,25 @@ export async function completeSend(input: { campaignId: string; leadId: string; 
       const nextAt = new Date(Date.now() + delay * 1000).toISOString()
       await tx.query(`update prospection_leads set status='scheduled', scheduled_at=$2, updated_at=now() where id=$1`, [next[0].id, nextAt])
       await tx.query(`update prospection_campaigns set next_send_after=$2, updated_at=now() where id=$1`, [input.campaignId, nextAt])
+      await tx.query(
+        `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+         values ($1,$2,'LEAD_SCHEDULED','Lead agendado para simulacao.',$3::jsonb)`,
+        [input.campaignId, next[0].id, JSON.stringify({ nextSendAt: nextAt })],
+      )
+      await tx.query(
+        `insert into prospection_events (campaign_id,event_type,message,metadata)
+         values ($1,'NEXT_SEND_RECALCULATED','Proximo envio recalculado.',$2::jsonb)`,
+        [input.campaignId, JSON.stringify({ nextSendAt: nextAt, reason: 'after_send' })],
+      )
     } else {
       await tx.query(`update prospection_campaigns set next_send_after=null, status=case when not exists (select 1 from prospection_leads where campaign_id=$1 and status in ('queued','scheduled','sending')) then 'completed' else status end, updated_at=now() where id=$1`, [input.campaignId])
+      await tx.query(
+        `insert into prospection_events (campaign_id,event_type,message,metadata)
+         values ($1,'QUEUE_EMPTY','Fila finalizada sem leads pendentes.','{}'::jsonb)`,
+        [input.campaignId],
+      )
     }
-    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,$3,'Abordagem inicial registrada.',$4::jsonb)`, [input.campaignId, input.leadId, input.status === 'dry_run' ? 'send_dry_run' : 'send_sent', JSON.stringify({ messageId: input.evolutionMessageId || null })])
+    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,$3,'Abordagem inicial registrada.',$4::jsonb)`, [input.campaignId, input.leadId, input.status === 'dry_run' ? 'LEAD_DRY_RUN_SENT' : 'LEAD_SENT', JSON.stringify({ messageId: input.evolutionMessageId || null })])
     const leadRows = await tx.query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1`, [input.leadId])
     const campaignRows = await tx.query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [input.campaignId])
     return { lead: toLead(camel(leadRows[0])), campaign: toCampaign(camel(campaignRows[0])), message: { status: input.status, body: input.body, template_id: input.templateId } }
