@@ -1,239 +1,204 @@
 "use client"
 
 import { useState } from "react"
-import { ProspectingHeader } from "@/components/prospecting/ProspectingHeader"
-import { StatCards } from "@/components/prospecting/StatCards"
-import { WhatsAppConnectionCard } from "@/components/prospecting/WhatsAppConnectionCard"
-import { ImportLeadsCard } from "@/components/prospecting/ImportLeadsCard"
-import { SendingRateCard } from "@/components/prospecting/SendingRateCard"
-import { MessageTemplatesCard } from "@/components/prospecting/MessageTemplatesCard"
-import { LeadQueueCard } from "@/components/prospecting/LeadQueueCard"
-import { CurrentSendingCard } from "@/components/prospecting/CurrentSendingCard"
-import { SentHistoryCard } from "@/components/prospecting/SentHistoryCard"
+import { MetricsBar } from "@/components/prospecting/MetricsBar"
+import { WhatsAppMiniCard } from "@/components/prospecting/WhatsAppMiniCard"
+import { ImportMiniCard } from "@/components/prospecting/ImportMiniCard"
+import { RateMiniCard } from "@/components/prospecting/RateMiniCard"
+import { MessagePreviewCard } from "@/components/prospecting/MessagePreviewCard"
+import { QueueMiniCard } from "@/components/prospecting/QueueMiniCard"
 import {
   mockLeads,
   mockTemplates,
   mockCampaignStats,
   mockSendingRate,
-  mockCurrentSending,
-  mockHistory,
-  type Lead,
   type CampaignStatus,
   type WhatsAppStatus,
   type SendingRate,
 } from "@/lib/mock-data"
 
+type MobileTab = "whatsapp" | "importar" | "ritmo" | "mensagem" | "fila"
+
 export default function ProspectingPage() {
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
   const [campaignStatus, setCampaignStatus] = useState<CampaignStatus>("parada")
-  const [leads, setLeads] = useState(mockLeads)
-  const [stats] = useState(mockCampaignStats)
   const [sendingRate, setSendingRate] = useState(mockSendingRate)
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
-
-  const handleStartCampaign = () => setCampaignStatus("rodando")
-  const handlePauseCampaign = () => setCampaignStatus("pausada")
-  const handleResumeCampaign = () => setCampaignStatus("rodando")
-  const handleCancelCampaign = () => setCampaignStatus("parada")
-  const handleNewCampaign = () => setCampaignStatus("parada")
-
-  const handleConfigureWhatsApp = () => {
-    setWhatsappStatus("conectando")
-    setTimeout(() => setWhatsappStatus("conectado"), 2500)
-  }
-
-  const handleRefreshQR = () => {}
-  const handleDisconnect = () => setWhatsappStatus("desconectado")
-  const handleSwapNumber = () => {}
-  const handleConfirmImport = () => {}
-  const handleSaveRate = (rate: SendingRate) => setSendingRate(rate)
-
-  const handleViewMessage = (lead: Lead) => setSelectedLead(lead)
-  const handleMarkDoNotSend = (lead: Lead) =>
-    setLeads((prev) =>
-      prev.map((l) => (l.id === lead.id ? { ...l, status: "nao-quero" as const } : l))
-    )
-  const handleRemoveFromQueue = (lead: Lead) =>
-    setLeads((prev) => prev.filter((l) => l.id !== lead.id))
-  const handleExport = () => {}
+  const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
 
   const isRunning = campaignStatus === "rodando"
+  const isPaused = campaignStatus === "pausada"
+
+  const handleToggleCampaign = () =>
+    setCampaignStatus(isRunning ? "pausada" : "rodando")
+  const handlePause = () => setCampaignStatus("pausada")
+  const handleConfigureWhatsApp = () => {
+    setWhatsappStatus("conectando")
+    setTimeout(() => setWhatsappStatus("conectado"), 2200)
+  }
+  const handleRefreshQR = () => {
+    if (whatsappStatus === "desconectado") handleConfigureWhatsApp()
+  }
+  const handleConfirmImport = () => {}
+  const handleSaveRate = (rate: SendingRate) => setSendingRate(rate)
+  const handleEditVariations = () => {}
+  const handleViewHistory = () => {}
+
+  // Fila derivada
+  const current = mockLeads.find((l) => l.status === "proximo") ?? mockLeads[1]
+  const upNext = mockLeads.filter((l) => l.status === "aguardando")
+  const lastSent = mockLeads.filter((l) => l.status === "enviado").at(-1) ?? null
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Topbar */}
-      <div className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto max-w-screen-xl px-4 sm:px-6">
-          <div className="flex h-11 items-center gap-3">
-            {/* Logo */}
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="flex h-5 w-5 items-center justify-center rounded bg-primary">
-                <svg
-                  width="10"
-                  height="10"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  className="text-primary-foreground"
-                  aria-hidden="true"
-                >
-                  <polygon points="5 3 19 12 5 21 5 3" />
-                </svg>
-              </div>
-              <span className="text-xs font-bold tracking-wide text-foreground uppercase">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
+      {/* Header compacto */}
+      <header className="shrink-0 border-b border-border bg-background/95 px-3 backdrop-blur sm:px-5">
+        <div className="mx-auto flex h-12 max-w-screen-2xl items-center gap-2 sm:gap-3">
+          {/* Logo */}
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded bg-primary">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+            </div>
+            <div className="leading-none">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-foreground">
                 Central Play Plus
-              </span>
-            </div>
-
-            <div className="h-3.5 w-px bg-border hidden sm:block" aria-hidden="true" />
-
-            {/* Nav */}
-            <nav className="hidden items-center gap-0.5 sm:flex" aria-label="Navegação principal">
-              {["Dashboard", "Prospecção", "Instâncias", "Templates", "Relatórios"].map((item) => (
-                <button
-                  key={item}
-                  className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    item === "Prospecção"
-                      ? "bg-primary/15 text-primary"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
-            </nav>
-
-            {/* Status badge mobile */}
-            <div className="ml-auto sm:hidden">
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  isRunning ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground"
-                }`}
-              >
-                <span
-                  className={`h-1 w-1 rounded-full ${
-                    isRunning ? "bg-primary animate-pulse" : "bg-muted-foreground"
-                  }`}
-                />
-                {isRunning ? "Rodando" : "Parado"}
-              </span>
+              </p>
+              <p className="text-[10px] text-muted-foreground">Prospecção</p>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Conteúdo principal */}
-      <main className="mx-auto max-w-screen-xl px-4 py-6 sm:px-6">
-        <ProspectingHeader
-          whatsappStatus={whatsappStatus}
-          campaignStatus={campaignStatus}
-          onStartCampaign={handleStartCampaign}
-          onPauseCampaign={handlePauseCampaign}
-          onResumeCampaign={handleResumeCampaign}
-          onCancelCampaign={handleCancelCampaign}
-          onConfigureWhatsApp={handleConfigureWhatsApp}
-          onNewCampaign={handleNewCampaign}
-        />
-
-        <StatCards stats={stats} />
-
-        {/* Agora enviando — só aparece quando rodando */}
-        {isRunning && (
-          <div className="mb-5">
-            <CurrentSendingCard
-              lead={mockCurrentSending.lead}
-              template={mockTemplates[mockCurrentSending.templateIndex]}
-              initialTimer={mockCurrentSending.timerRestante}
-              isRunning={isRunning}
+          {/* Status WhatsApp */}
+          <span
+            className={`ml-1 hidden items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium sm:inline-flex ${
+              whatsappStatus === "conectado"
+                ? "bg-[var(--success)]/15 text-[var(--success)]"
+                : whatsappStatus === "conectando"
+                ? "bg-primary/15 text-primary"
+                : "bg-destructive/15 text-destructive"
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                whatsappStatus === "conectado"
+                  ? "bg-[var(--success)]"
+                  : whatsappStatus === "conectando"
+                  ? "bg-primary animate-pulse"
+                  : "bg-destructive"
+              }`}
             />
-          </div>
-        )}
+            {whatsappStatus === "conectado"
+              ? "WhatsApp conectado"
+              : whatsappStatus === "conectando"
+              ? "Conectando..."
+              : "WhatsApp desconectado"}
+          </span>
 
-        {/* Grid: QR Code + Import + Ritmo */}
-        <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <WhatsAppConnectionCard
-            status={whatsappStatus}
-            onRefreshQR={handleRefreshQR}
-            onDisconnect={handleDisconnect}
-            onSwapNumber={handleSwapNumber}
-          />
-          <ImportLeadsCard onConfirmImport={handleConfirmImport} />
-          <SendingRateCard initialRate={sendingRate} onSave={handleSaveRate} />
-        </div>
-
-        {/* Templates */}
-        <div className="mb-5">
-          <MessageTemplatesCard templates={mockTemplates} />
-        </div>
-
-        {/* Fila */}
-        <div className="mb-5">
-          <LeadQueueCard
-            leads={leads}
-            onViewMessage={handleViewMessage}
-            onMarkDoNotSend={handleMarkDoNotSend}
-            onRemoveFromQueue={handleRemoveFromQueue}
-          />
-        </div>
-
-        {/* Histórico */}
-        <div className="mb-8">
-          <SentHistoryCard entries={mockHistory} onExport={handleExport} />
-        </div>
-      </main>
-
-      {/* Modal ver mensagem */}
-      {selectedLead && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Visualizar mensagem"
-          onClick={(e) => { if (e.target === e.currentTarget) setSelectedLead(null) }}
-        >
-          <div className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-2xl flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-foreground">{selectedLead.nome}</p>
-                <p className="text-xs text-muted-foreground font-mono mt-0.5">{selectedLead.telefone}</p>
-              </div>
-              <button
-                onClick={() => setSelectedLead(null)}
-                className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                aria-label="Fechar"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Bolha WhatsApp dark */}
-            <div className="rounded-lg bg-[oklch(0.19_0.013_243)] px-4 py-3 font-mono text-xs leading-6 text-muted-foreground max-h-64 overflow-y-auto">
-              {mockTemplates[selectedLead.templateIndex]?.corpo
-                .replace(/{{nome}}/g, selectedLead.nome)
-                .split("\n\n")
-                .map((para, i) => (
-                  <p key={i} className="mb-2.5 last:mb-0">
-                    {para.split(/(\*[^*]+\*)/).map((part, j) =>
-                      part.startsWith("*") && part.endsWith("*") ? (
-                        <strong key={j} className="font-semibold text-foreground">{part.slice(1, -1)}</strong>
-                      ) : (
-                        <span key={j}>{part}</span>
-                      )
-                    )}
-                  </p>
-                ))}
-            </div>
-
+          {/* Ações */}
+          <div className="ml-auto flex items-center gap-1.5">
             <button
-              onClick={() => setSelectedLead(null)}
-              className="w-full rounded bg-secondary py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+              onClick={handleConfigureWhatsApp}
+              className="hidden rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
             >
-              Fechar
+              Configurar WhatsApp
+            </button>
+            {(isRunning || isPaused) && (
+              <button
+                onClick={handlePause}
+                disabled={isPaused}
+                className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-40"
+              >
+                Pausar
+              </button>
+            )}
+            <button
+              onClick={handleToggleCampaign}
+              className={`rounded-md px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                isRunning
+                  ? "bg-secondary text-foreground hover:bg-muted"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90"
+              }`}
+            >
+              {isRunning ? "Em andamento" : isPaused ? "Retomar" : "Iniciar campanha"}
             </button>
           </div>
         </div>
-      )}
+      </header>
+
+      {/* Conteúdo — cabe na viewport */}
+      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4">
+        <MetricsBar stats={mockCampaignStats} />
+
+        {/* DESKTOP: grid de blocos */}
+        <div className="hidden flex-1 grid-rows-[1fr_1fr] gap-3 overflow-hidden lg:grid">
+          <div className="grid grid-cols-3 gap-3 overflow-hidden">
+            <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
+            <ImportMiniCard onConfirmImport={handleConfirmImport} />
+            <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
+          </div>
+          <div className="grid grid-cols-2 gap-3 overflow-hidden">
+            <MessagePreviewCard templates={mockTemplates} onEdit={handleEditVariations} />
+            <QueueMiniCard
+              current={current}
+              upNext={upNext}
+              lastSent={lastSent}
+              isRunning={isRunning}
+              onViewHistory={handleViewHistory}
+            />
+          </div>
+        </div>
+
+        {/* MOBILE: abas */}
+        <div className="flex flex-1 flex-col overflow-hidden lg:hidden">
+          <div className="flex-1 overflow-hidden">
+            {mobileTab === "whatsapp" && (
+              <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
+            )}
+            {mobileTab === "importar" && (
+              <ImportMiniCard onConfirmImport={handleConfirmImport} />
+            )}
+            {mobileTab === "ritmo" && (
+              <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
+            )}
+            {mobileTab === "mensagem" && (
+              <MessagePreviewCard templates={mockTemplates} onEdit={handleEditVariations} />
+            )}
+            {mobileTab === "fila" && (
+              <QueueMiniCard
+                current={current}
+                upNext={upNext}
+                lastSent={lastSent}
+                isRunning={isRunning}
+                onViewHistory={handleViewHistory}
+              />
+            )}
+          </div>
+
+          {/* Abas inferiores */}
+          <nav className="mt-3 grid shrink-0 grid-cols-5 gap-1 rounded-lg border border-border bg-card p-1">
+            {[
+              { id: "whatsapp" as const, label: "WhatsApp" },
+              { id: "importar" as const, label: "Importar" },
+              { id: "ritmo" as const, label: "Ritmo" },
+              { id: "mensagem" as const, label: "Msg" },
+              { id: "fila" as const, label: "Fila" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setMobileTab(tab.id)}
+                aria-pressed={mobileTab === tab.id}
+                className={`rounded-md py-2 text-[10px] font-medium transition-colors ${
+                  mobileTab === tab.id
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </main>
     </div>
   )
 }
