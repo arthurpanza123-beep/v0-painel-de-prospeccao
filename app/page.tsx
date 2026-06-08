@@ -1,17 +1,14 @@
 "use client"
 
 import { useState } from "react"
-import { Sidebar } from "@/components/prospecting/Sidebar"
 import { MetricsBar } from "@/components/prospecting/MetricsBar"
 import { OperationsCard } from "@/components/prospecting/OperationsCard"
 import { WhatsAppCard } from "@/components/prospecting/WhatsAppCard"
 import { QueueStepper } from "@/components/prospecting/QueueStepper"
-import { ConversationCard } from "@/components/prospecting/ConversationCard"
 import { ActionMenu, type MenuAction } from "@/components/prospecting/ActionMenu"
 import { ConfirmModal } from "@/components/prospecting/ConfirmModal"
 import {
   mockLeads,
-  mockTemplates,
   mockCampaignStats,
   mockSendingRate,
   type SimStatus,
@@ -135,15 +132,13 @@ export default function ProspectingPage() {
   })()
 
   return (
-    <div className="flex h-[100dvh] gap-0 overflow-hidden p-2 sm:p-3 lg:gap-3 lg:p-4">
-      <Sidebar />
-
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="flex h-[100dvh] flex-col overflow-hidden">
+      <div className="mx-auto flex min-w-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-3 sm:px-5 lg:px-6">
         {/* ── TOPO ──────────────────────────────────────────────────────────── */}
-        <header className="flex shrink-0 items-center gap-3 px-1 pb-3 sm:pb-4">
-          {/* Logo (mobile) + título */}
+        <header className="flex shrink-0 items-center gap-3 py-4 sm:py-5">
+          {/* Logo + título */}
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl btn-glossy lg:hidden">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl btn-glossy">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
                 <polygon points="6 4 20 12 6 20 6 4" />
               </svg>
@@ -180,7 +175,7 @@ export default function ProspectingPage() {
               : "WhatsApp desconectado"}
           </span>
 
-          {/* Botão principal único + menu + sino */}
+          {/* Botão principal único + menu */}
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={handlePrimary}
@@ -198,23 +193,14 @@ export default function ProspectingPage() {
               {PRIMARY_LABEL[sim]}
             </button>
             <ActionMenu actions={secondaryActions} />
-            <button
-              aria-label="Notificações"
-              className="grid h-9 w-9 place-items-center rounded-xl border border-border bg-card text-muted-foreground shadow-[0_1px_0_0_oklch(1_0_0)_inset] transition-colors hover:bg-secondary hover:text-foreground"
-            >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-              </svg>
-            </button>
           </div>
         </header>
 
         {/* ── CONTEÚDO ───────────────────────────────────────────────────────── */}
-        <main className="flex flex-1 flex-col gap-3 overflow-y-auto pb-1 pr-0.5 sm:gap-4">
+        <main className="flex flex-1 flex-col gap-3 overflow-y-auto pb-5 sm:gap-4">
           <MetricsBar stats={mockCampaignStats} />
 
-          {/* Linha 1: Operações (2/3) + WhatsApp (1/3) */}
+          {/* Operações + WhatsApp */}
           <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2">
               <OperationsCard
@@ -228,17 +214,14 @@ export default function ProspectingPage() {
             <WhatsAppCard status={whatsappStatus} onTrocarNumero={handleTrocarNumero} />
           </div>
 
-          {/* Linha 2: Fila + Conversa */}
-          <div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
-            <QueueStepper
-              upNext={upNext}
-              lastSent={lastSent}
-              totalNaFila={mockCampaignStats.naFila}
-              isRunning={isRunning}
-              onViewHistory={() => {}}
-            />
-            <ConversationCard templates={mockTemplates} />
-          </div>
+          {/* Fila */}
+          <QueueStepper
+            upNext={upNext}
+            lastSent={lastSent}
+            totalNaFila={mockCampaignStats.naFila}
+            isRunning={isRunning}
+            onViewHistory={() => {}}
+          />
         </main>
       </div>
 
