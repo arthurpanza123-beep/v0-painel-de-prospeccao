@@ -42,6 +42,35 @@ export function WhatsAppCard({
         </span>
       </div>
 
+      {/* Desconectado → QR code para escanear */}
+      {!connected && !connecting ? (
+        <div className="mt-3 flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <div className="rounded-2xl bg-white p-3 shadow-[0_1px_0_0_oklch(1_0_0)_inset,0_10px_24px_-14px_oklch(0.45_0.05_255_/_0.4)]">
+            <QrCode />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">Escaneie o QR Code</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              WhatsApp → Aparelhos conectados → Conectar aparelho
+            </p>
+          </div>
+          <button
+            onClick={onTrocarNumero}
+            className="btn-glossy inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-primary-foreground"
+          >
+            Gerar novo código
+          </button>
+        </div>
+      ) : connecting ? (
+        <div className="mt-3 flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <div className="grid h-20 w-20 place-items-center rounded-full bg-primary/10">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="animate-spin text-primary" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+            </svg>
+          </div>
+          <p className="text-sm font-semibold text-foreground">Conectando ao WhatsApp...</p>
+        </div>
+      ) : (
       <div className="mt-3 flex flex-1 items-center gap-4">
         {/* Ícone WhatsApp 3D verde */}
         <div className="relative grid h-24 w-24 shrink-0 place-items-center rounded-full sm:h-28 sm:w-28">
@@ -61,9 +90,7 @@ export function WhatsAppCard({
           <span
             className="absolute inset-[18px] grid place-items-center rounded-full text-white"
             style={{
-              background: connected
-                ? "linear-gradient(180deg, oklch(0.7 0.16 150), oklch(0.55 0.16 150))"
-                : "linear-gradient(180deg, oklch(0.8 0.01 255), oklch(0.7 0.01 255))",
+              background: "linear-gradient(180deg, oklch(0.7 0.16 150), oklch(0.55 0.16 150))",
               boxShadow: "0 1px 0 0 oklch(1 0 0 / 0.5) inset, 0 -2px 6px oklch(0.3 0.1 150 / 0.35) inset, 0 6px 14px -6px oklch(0.55 0.16 150 / 0.6)",
             }}
             aria-hidden="true"
@@ -78,9 +105,7 @@ export function WhatsAppCard({
         {/* Info */}
         <div className="min-w-0 flex-1">
           <p className="truncate text-lg font-bold text-foreground">{conta}</p>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {connected ? "Conectado" : connecting ? "Conectando..." : "Sem conexão"} · {numero}
-          </p>
+          <p className="mt-0.5 text-sm text-muted-foreground">Conectado · {numero}</p>
           <button
             onClick={onTrocarNumero}
             className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground shadow-[0_1px_0_0_oklch(1_0_0)_inset,0_1px_2px_oklch(0.45_0.05_255_/_0.08)] transition-colors hover:bg-secondary"
@@ -95,17 +120,58 @@ export function WhatsAppCard({
           </button>
         </div>
       </div>
+      )}
 
-      {/* Rodapé status */}
-      <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[var(--success)]/8 px-4 py-2.5">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--success)]">
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-        <p className="text-xs font-medium text-foreground">
-          {connected ? "Conexão estável e ativa" : connecting ? "Estabelecendo conexão" : "Conecte para simular"}
-          <span className="ml-1.5 font-normal text-muted-foreground">Monitorando em tempo real</span>
-        </p>
-      </div>
+      {/* Rodapé status — só quando conectado */}
+      {connected && (
+        <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[var(--success)]/8 px-4 py-2.5">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--success)]">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <p className="text-xs font-medium text-foreground">
+            Conexão estável e ativa
+            <span className="ml-1.5 font-normal text-muted-foreground">Monitorando em tempo real</span>
+          </p>
+        </div>
+      )}
     </section>
+  )
+}
+
+function QrCode() {
+  // QR ilustrativo determinístico (não é um código real)
+  const cells = 21
+  const pattern: boolean[] = []
+  for (let i = 0; i < cells * cells; i++) {
+    const r = Math.floor(i / cells)
+    const c = i % cells
+    // Cantos finder (3 quadrados)
+    const inFinder =
+      (r < 7 && c < 7) || (r < 7 && c > cells - 8) || (r > cells - 8 && c < 7)
+    if (inFinder) {
+      const lr = r % (cells - 7 < r ? cells : 7)
+      const lc = c % (cells - 7 < c ? cells : 7)
+      const rr = r > cells - 8 ? r - (cells - 7) : r
+      const cc = c > cells - 8 ? c - (cells - 7) : c
+      const ring = rr === 0 || rr === 6 || cc === 0 || cc === 6
+      const core = rr >= 2 && rr <= 4 && cc >= 2 && cc <= 4
+      pattern.push(ring || core)
+      continue
+    }
+    // pseudo-aleatório estável
+    pattern.push(((r * 7 + c * 13 + r * c) % 5) % 2 === 0)
+  }
+
+  return (
+    <div
+      className="grid h-32 w-32"
+      style={{ gridTemplateColumns: `repeat(${cells}, 1fr)` }}
+      role="img"
+      aria-label="QR Code para conectar o WhatsApp"
+    >
+      {pattern.map((on, i) => (
+        <span key={i} className={on ? "bg-foreground" : "bg-transparent"} />
+      ))}
+    </div>
   )
 }

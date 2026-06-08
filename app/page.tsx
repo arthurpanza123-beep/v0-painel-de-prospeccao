@@ -1,9 +1,11 @@
 "use client"
 
 import { useState } from "react"
+import { BackgroundFX } from "@/components/prospecting/BackgroundFX"
 import { MetricsBar } from "@/components/prospecting/MetricsBar"
 import { OperationsCard } from "@/components/prospecting/OperationsCard"
 import { WhatsAppCard } from "@/components/prospecting/WhatsAppCard"
+import { ImportCard } from "@/components/prospecting/ImportCard"
 import { QueueStepper } from "@/components/prospecting/QueueStepper"
 import { ActionMenu, type MenuAction } from "@/components/prospecting/ActionMenu"
 import { ConfirmModal } from "@/components/prospecting/ConfirmModal"
@@ -26,7 +28,7 @@ const PRIMARY_LABEL: Record<SimStatus, string> = {
 }
 
 export default function ProspectingPage() {
-  const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("conectado")
+  const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
   const [sim, setSim] = useState<SimStatus>("pronta")
   const [modal, setModal] = useState<ModalKind>(null)
 
@@ -132,7 +134,8 @@ export default function ProspectingPage() {
   })()
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden">
+    <div className="relative flex h-[100dvh] flex-col overflow-hidden">
+      <BackgroundFX />
       <div className="mx-auto flex min-w-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-3 sm:px-5 lg:px-6">
         {/* ── TOPO ──────────────────────────────────────────────────────────── */}
         <header className="flex shrink-0 items-center gap-3 py-4 sm:py-5">
@@ -200,7 +203,7 @@ export default function ProspectingPage() {
         <main className="flex flex-1 flex-col gap-3 overflow-y-auto pb-5 sm:gap-4">
           <MetricsBar stats={mockCampaignStats} />
 
-          {/* Operações + WhatsApp */}
+          {/* Operações + coluna lateral (WhatsApp + Importar) */}
           <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2">
               <OperationsCard
@@ -214,14 +217,19 @@ export default function ProspectingPage() {
             <WhatsAppCard status={whatsappStatus} onTrocarNumero={handleTrocarNumero} />
           </div>
 
-          {/* Fila */}
-          <QueueStepper
-            upNext={upNext}
-            lastSent={lastSent}
-            totalNaFila={mockCampaignStats.naFila}
-            isRunning={isRunning}
-            onViewHistory={() => {}}
-          />
+          {/* Importar leads + Fila */}
+          <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
+            <ImportCard leadsImportados={mockCampaignStats.leadsImportados} />
+            <div className="lg:col-span-2">
+              <QueueStepper
+                upNext={upNext}
+                lastSent={lastSent}
+                totalNaFila={mockCampaignStats.naFila}
+                isRunning={isRunning}
+                onViewHistory={() => {}}
+              />
+            </div>
+          </div>
         </main>
       </div>
 
