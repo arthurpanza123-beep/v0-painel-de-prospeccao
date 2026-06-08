@@ -13,6 +13,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, code: 'INVALID_FILE_TYPE', message: 'Formato aceito: .xlsx, .xls ou .csv.' }, { status: 400 })
   }
   const rows = await parseLeadFile(file)
-  const summary = await importRows(rows, file.name, campaignId || undefined)
+  const forceTestReimport = ['1', 'true', 'yes', 'on'].includes(String(form?.get('forceTestReimport') || '').toLowerCase())
+  const summary = await importRows(rows, file.name, { campaignId: campaignId || undefined, forceTestReimport })
   return NextResponse.json({ ok: true, summary })
 }

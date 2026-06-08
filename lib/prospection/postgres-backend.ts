@@ -4,6 +4,7 @@ import { renderTemplate, defaultTemplates } from './templates'
 import { normalizePhone } from './phone'
 import type {
   ImportSummary,
+  ImportRowsOptions,
   ProspectionCampaign,
   ProspectionEvent,
   ProspectionLead,
@@ -12,6 +13,7 @@ import type {
 } from './types'
 
 const camel = (row: any): Record<string, unknown> => row
+const authorizedTestReimportPhones = new Set(['5522988473304', '5522988345946'])
 
 const poolCache = { url: '', pool: null as Pool | null, ready: null as Promise<void> | null }
 
@@ -123,6 +125,83 @@ async function isActiveClient(phone: string) {
   }
 }
 
+function normalizeHeader(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+function pick(row: Record<string, unknown>, aliases: string[]) {
+  const wanted = aliases.map(normalizeHeader)
+  const keys = Object.keys(row).filter((candidate) => wanted.includes(normalizeHeader(candidate)))
+  const key = keys.find((candidate) => String(row[candidate] || '').trim()) || keys[0]
+  return key ? String(row[key] || '').trim() : ''
+}
+
+function emptyImportSummary(imported: number, campaignId: string): ImportSummary {
+  return {
+    imported,
+    valid: 0,
+    queued: 0,
+    duplicates: 0,
+    invalid: 0,
+    optOutIgnored: 0,
+    alreadySent: 0,
+    activeClientsBlocked: 0,
+    errors: 0,
+    testReimports: 0,
+    campaignId,
+    details: [],
+  }
+}
+
+function addImportDetail(
+  summary: ImportSummary,
+  input: { row: number; name: string; phoneRaw: string; phoneE164: string; status: ProspectionLead['status']; reason: string; queued?: boolean },
+) {
+  summary.details.push({
+    row: input.row,
+    name: input.name,
+    phoneRaw: input.phoneRaw,
+    phoneE164: input.phoneE164,
+    status: input.status,
+    reason: input.reason,
+    queued: Boolean(input.queued),
+  })
+}
+
+async function getSelectedCampaign(campaignId?: string) {
+  if (campaignId) {
+    const rows = await query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [campaignId])
+    return rows[0] ? toCampaign(camel(rows[0])) : null
+  }
+  const activeRows = await query<ProspectionCampaign>(
+    `select * from prospection_campaigns
+      where status in ('running','paused','draft')
+      order by created_at desc
+      limit 10`,
+  )
+  for (const row of activeRows) {
+    const campaign = toCampaign(camel(row))
+    if (campaign.status === 'running') {
+      const openRows = await query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_leads
+          where campaign_id=$1 and status in ('queued','scheduled','sending')`,
+        [campaign.id],
+      )
+      if (Number(openRows[0]?.count || 0) === 0) {
+        await query(`update prospection_campaigns set status='completed', next_send_after=null, updated_at=now() where id=$1`, [campaign.id])
+        continue
+      }
+    }
+    return campaign
+  }
+  return null
+}
+
 async function withTx<T>(fn: (client: { query: typeof query }) => Promise<T>) {
   const client = pool()
   if (!client) throw new Error('PROSPECTION_DATABASE_URL ausente.')
@@ -199,6 +278,15 @@ export async function getOrCreateDraftCampaign() {
 export async function updateCampaignStatus(campaignId: string, status: ProspectionCampaign['status']) {
   await ensureReady()
   return withTx(async (tx) => {
+    if (status === 'running') {
+      const openRows = await tx.query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_leads
+          where campaign_id=$1 and status in ('queued','scheduled','sending')`,
+        [campaignId],
+      )
+      if (Number(openRows[0]?.count || 0) === 0) status = 'completed'
+    }
     const rows = await tx.query<ProspectionCampaign>(
       `update prospection_campaigns set status=$2, updated_at=now() where id=$1 returning *`,
       [campaignId, status],
@@ -237,35 +325,31 @@ export async function updateTemplate(templateId: number, patch: Partial<Prospect
   return toTemplate(camel(rows[0]))
 }
 
-export async function importRows(rows: Array<Record<string, unknown>>, sourceFileName: string, campaignId?: string): Promise<ImportSummary> {
+export async function importRows(rows: Array<Record<string, unknown>>, sourceFileName: string, options?: string | ImportRowsOptions): Promise<ImportSummary> {
   await ensureReady()
+  const campaignId = typeof options === 'string' ? options : options?.campaignId
+  const forceTestReimport = typeof options === 'object' ? Boolean(options.forceTestReimport) : false
   const campaign = campaignId ? (await query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [campaignId]))[0] : await getOrCreateDraftCampaign()
   if (!campaign) throw new Error('Campanha nao encontrada.')
-  const summary: ImportSummary = { imported: rows.length, valid: 0, queued: 0, duplicates: 0, invalid: 0, optOutIgnored: 0, alreadySent: 0, activeClientsBlocked: 0, campaignId: campaign.id }
+  const summary = emptyImportSummary(rows.length, campaign.id)
   const seen = new Set<string>()
   return withTx(async (tx) => {
-    for (const row of rows) {
-      const pick = (aliases: string[]) => {
-        const wanted = aliases.map((value) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, ''))
-        const keys = Object.keys(row).filter((candidate) => wanted.includes(candidate.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')))
-        const key = keys.find((candidate) => String(row[candidate] || '').trim()) || keys[0]
-        return key ? String(row[key] || '').trim() : ''
-      }
-      const name = pick(['Nome', 'name', 'cliente', 'contato'])
-      const phoneRaw = pick(['Telefone 1', 'Telefone', 'Celular', 'WhatsApp', 'phone'])
+    for (const [index, row] of rows.entries()) {
+      const name = pick(row, ['Nome', 'name', 'cliente', 'contato'])
+      const phoneRaw = pick(row, ['Telefone 1', 'Telefone', 'Celular', 'WhatsApp', 'phone'])
       const phone = normalizePhone(phoneRaw)
+      const canForceTestReimport = forceTestReimport && authorizedTestReimportPhones.has(phone)
       const base = {
         campaign_id: campaign.id,
         name,
         phone_raw: phoneRaw,
         phone_e164: phone,
-        email: pick(['E-mail', 'email']) || null,
-        city: pick(['Cidade', 'city']) || null,
-        uf: pick(['UF', 'uf']) || null,
+        email: pick(row, ['E-mail', 'email']) || null,
+        city: pick(row, ['Cidade', 'city']) || null,
+        uf: pick(row, ['UF', 'uf']) || null,
         source_file_name: sourceFileName,
-        metadata: { raw: row },
+        metadata: { raw: row, forceTestReimport: canForceTestReimport || undefined },
       }
-      const payload = { ...base, status: 'imported', template_id: null, message_preview: null, scheduled_at: null, sent_at: null, responded_at: null, last_response_text: null, send_attempts: 0, error_message: null }
       if (!phone) {
         summary.invalid += 1
         await tx.query(
@@ -273,81 +357,115 @@ export async function importRows(rows: Array<Record<string, unknown>>, sourceFil
            values ($1,$2,$3,$4,$5,$6,$7,$8,'invalid_phone',$9,$10::jsonb)`,
           [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone invalido.', JSON.stringify({ raw: row })],
         )
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'invalid_phone', reason: 'Telefone invalido.' })
         continue
       }
       if (seen.has(phone)) {
         summary.duplicates += 1
         await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,error_message,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'duplicate',$9,$10::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone duplicado ou ja importado.', JSON.stringify({ raw: row })])
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: 'Telefone duplicado dentro do arquivo.' })
         continue
       }
       const optout = await tx.query<{ id: string }>(`select id from prospection_optouts where phone_e164=$1 limit 1`, [phone])
       if (optout[0]) {
         summary.optOutIgnored += 1
         await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,error_message,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'opt_out',$9,$10::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone em opt-out global.', JSON.stringify({ raw: row })])
-        continue
-      }
-      const existingLead = await tx.query<{ id: string }>(`select id from prospection_leads where phone_e164=$1 and status not in ('invalid_phone','duplicate') limit 1`, [phone])
-      if (existingLead[0]) {
-        summary.duplicates += 1
-        await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,error_message,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'duplicate',$9,$10::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone duplicado ou ja importado.', JSON.stringify({ raw: row })])
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'opt_out', reason: 'Telefone em opt-out global.' })
         continue
       }
       const sent = await tx.query<{ id: string }>(`select m.id from prospection_messages m join prospection_leads l on l.id = m.lead_id where m.direction='outbound' and l.phone_e164=$1 limit 1`, [phone])
-      if (sent[0]) {
+      if (sent[0] && !canForceTestReimport) {
         summary.alreadySent += 1
         await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,error_message,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'duplicate',$9,$10::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone ja recebeu abordagem anterior.', JSON.stringify({ raw: row })])
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: 'Telefone ja recebeu abordagem anterior.' })
         continue
       }
-      if (await isActiveClient(phone)) {
+      const existingLead = await tx.query<{ id: string }>(`select id from prospection_leads where phone_e164=$1 and status not in ('invalid_phone','duplicate') limit 1`, [phone])
+      if (existingLead[0] && !canForceTestReimport) {
+        summary.duplicates += 1
+        await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,error_message,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'duplicate',$9,$10::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone duplicado ou ja importado.', JSON.stringify({ raw: row })])
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: 'Telefone duplicado ou ja importado.' })
+        continue
+      }
+      if ((await isActiveClient(phone)) && !canForceTestReimport) {
         summary.activeClientsBlocked += 1
         await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,error_message,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'duplicate',$9,$10::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, 'Telefone ja consta como cliente ativo/teste ativo.', JSON.stringify({ raw: row })])
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: 'Telefone ja consta como cliente ativo/teste ativo.' })
         continue
       }
       summary.valid += 1
       summary.queued += 1
+      if (canForceTestReimport) summary.testReimports += 1
       seen.add(phone)
-      await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, JSON.stringify({ raw: row })])
+      await tx.query(`insert into prospection_leads (campaign_id,name,phone_raw,phone_e164,email,city,uf,source_file_name,status,metadata) values ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9::jsonb)`, [campaign.id, name, phoneRaw, phone, base.email, base.city, base.uf, sourceFileName, JSON.stringify(base.metadata)])
+      addImportDetail(summary, {
+        row: index + 1,
+        name,
+        phoneRaw,
+        phoneE164: phone,
+        status: 'queued',
+        reason: canForceTestReimport ? 'Reimportado como teste autorizado.' : 'Adicionado a fila.',
+        queued: true,
+      })
     }
     await tx.query(`insert into prospection_events (campaign_id,event_type,message,metadata) values ($1,'leads_imported','Arquivo de leads importado.',$2::jsonb)`, [campaign.id, JSON.stringify({ sourceFileName, summary })])
     return summary
   })
 }
 
-export async function listLeads(input?: { status?: string; page?: number; pageSize?: number }) {
+export async function listLeads(input?: { status?: string; campaignId?: string; page?: number; pageSize?: number }) {
   await ensureReady()
   const page = Math.max(1, input?.page || 1)
   const pageSize = Math.min(100, Math.max(1, input?.pageSize || 50))
-  const where = input?.status ? 'where status=$1' : ''
-  const params = input?.status ? [input.status, pageSize, (page - 1) * pageSize] : [pageSize, (page - 1) * pageSize]
+  const clauses: string[] = []
+  const values: unknown[] = []
+  if (input?.status) {
+    values.push(input.status)
+    clauses.push(`status=$${values.length}`)
+  }
+  if (input?.campaignId) {
+    values.push(input.campaignId)
+    clauses.push(`campaign_id=$${values.length}`)
+  }
+  const where = clauses.length ? `where ${clauses.join(' and ')}` : ''
+  const limitParam = values.length + 1
+  const offsetParam = values.length + 2
   const rows = await query<ProspectionLead>(
-    `select * from prospection_leads ${where} order by created_at desc limit $${input?.status ? 2 : 1} offset $${input?.status ? 3 : 2}`,
-    params,
+    `select * from prospection_leads ${where} order by created_at desc limit $${limitParam} offset $${offsetParam}`,
+    [...values, pageSize, (page - 1) * pageSize],
   )
-  const countRows = await query<{ count: string }>(`select count(*)::text as count from prospection_leads ${where}`, input?.status ? [input.status] : [])
+  const countRows = await query<{ count: string }>(`select count(*)::text as count from prospection_leads ${where}`, values)
   return { items: rows.map((row) => toLead(camel(row))), total: Number(countRows[0]?.count || 0), page, pageSize }
 }
 
-export async function getQueueSummary() {
+export async function getQueueSummary(input?: { campaignId?: string }) {
   await ensureReady()
-  const campaigns = await query<ProspectionCampaign>(`select * from prospection_campaigns where status in ('running','paused','draft') order by created_at desc limit 1`)
-  const currentRows = await query<ProspectionLead>(`select * from prospection_leads where status='sending' order by updated_at desc limit 1`)
-  const upcomingRows = await query<ProspectionLead>(`select * from prospection_leads where status in ('queued','scheduled') order by coalesce(scheduled_at,created_at) asc limit 3`)
-  const lastRows = await query<ProspectionMessage>(`select m.* from prospection_messages m where m.direction='outbound' and m.type='initial' order by m.created_at desc limit 1`)
+  const activeCampaign = await getSelectedCampaign(input?.campaignId)
+  if (!activeCampaign) return { activeCampaign: null, current: null, upcoming: [], lastSent: null }
+  const currentRows = await query<ProspectionLead>(`select * from prospection_leads where campaign_id=$1 and status='sending' order by updated_at desc limit 1`, [activeCampaign.id])
+  const upcomingRows = await query<ProspectionLead>(`select * from prospection_leads where campaign_id=$1 and status in ('queued','scheduled') order by coalesce(scheduled_at,created_at) asc limit 3`, [activeCampaign.id])
+  const lastRows = await query<ProspectionMessage>(`select m.* from prospection_messages m where m.campaign_id=$1 and m.direction='outbound' and m.type='initial' order by m.created_at desc limit 1`, [activeCampaign.id])
   const lastLeadRows = lastRows[0]
     ? await query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1`, [lastRows[0].lead_id])
     : []
   return {
-    activeCampaign: campaigns[0] ? toCampaign(camel(campaigns[0])) : null,
+    activeCampaign,
     current: currentRows[0] ? toLead(camel(currentRows[0])) : null,
     upcoming: upcomingRows.map((row) => toLead(camel(row))),
     lastSent: lastLeadRows[0] ? toLead(camel(lastLeadRows[0])) : null,
   }
 }
 
-export async function getStatus() {
+export async function getStatus(input?: { campaignId?: string }) {
   await ensureReady()
-  const [campaignRows, statsRows, nextRows] = await Promise.all([
-    query<ProspectionCampaign>(`select * from prospection_campaigns where status in ('running','paused','draft') order by created_at desc limit 1`),
+  const activeCampaign = await getSelectedCampaign(input?.campaignId)
+  if (!activeCampaign) {
+    return {
+      stats: { imported: 0, queued: 0, sentToday: 0, responded: 0, optOut: 0, nextSend: null },
+      activeCampaign: null,
+    }
+  }
+  const [statsRows, nextRows] = await Promise.all([
     query<{ imported: string; queued: string; sent_today: string; responded: string; optout: string; next_send: string | null }>(
       `select
         count(*)::text as imported,
@@ -355,10 +473,12 @@ export async function getStatus() {
         count(*) filter (where sent_at::date = current_date)::text as sent_today,
         count(*) filter (where status in ('responded','responded_positive'))::text as responded,
         count(*) filter (where status = 'opt_out')::text as optout,
-        min(scheduled_at) filter (where status in ('queued','scheduled'))::text as next_send
-       from prospection_leads`,
+        min(coalesce(scheduled_at, created_at)) filter (where status in ('queued','scheduled'))::text as next_send
+       from prospection_leads
+       where campaign_id=$1`,
+      [activeCampaign.id],
     ),
-    query<{ next_send_after: string | null }>(`select next_send_after::text as next_send_after from prospection_campaigns where status='running' order by updated_at desc limit 1`),
+    query<{ next_send_after: string | null }>(`select next_send_after::text as next_send_after from prospection_campaigns where id=$1 and status='running' limit 1`, [activeCampaign.id]),
   ])
   return {
     stats: {
@@ -369,7 +489,7 @@ export async function getStatus() {
       optOut: Number(statsRows[0]?.optout || 0),
       nextSend: statsRows[0]?.next_send || nextRows[0]?.next_send_after || null,
     },
-    activeCampaign: campaignRows[0] ? toCampaign(camel(campaignRows[0])) : null,
+    activeCampaign,
   }
 }
 
@@ -394,7 +514,19 @@ export async function reserveNextLead() {
       [campaign.id],
     )
     const lead = leadRows[0]
-    if (!lead) return { ok: false as const, code: 'NO_DUE_LEAD' as const }
+    if (!lead) {
+      const openRows = await tx.query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_leads
+          where campaign_id=$1 and status in ('queued','scheduled','sending')`,
+        [campaign.id],
+      )
+      if (Number(openRows[0]?.count || 0) === 0) {
+        await tx.query(`update prospection_campaigns set status='completed', next_send_after=null, updated_at=now() where id=$1`, [campaign.id])
+        return { ok: false as const, code: 'QUEUE_EMPTY_COMPLETED' as const }
+      }
+      return { ok: false as const, code: 'NO_DUE_LEAD' as const }
+    }
     const templateRows = await tx.query<ProspectionTemplate>(`select * from prospection_templates where active=true order by weight asc, id asc`)
     const templates = templateRows.length ? templateRows : defaultTemplates
     const template = templates[(lead.send_attempts + Number(rateRows[0]?.count || 0)) % templates.length] || templates[0]
@@ -468,6 +600,35 @@ export async function recordInbound(input: { phone: string; text: string; classi
     await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,$3,'Resposta recebida.',$4::jsonb)`, [lead?.campaign_id || null, lead?.id || null, `inbound_${input.classification}`, JSON.stringify({ device: input.device || null })])
     const rows = lead ? await tx.query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1`, [lead.id]) : []
     return { lead: rows[0] ? toLead(camel(rows[0])) : null }
+  })
+}
+
+export async function cleanupTestDryRunData() {
+  await ensureReady()
+  return withTx(async (tx) => {
+    const campaignRows = await tx.query<{ id: string }>(
+      `select distinct c.id
+         from prospection_campaigns c
+         left join prospection_events e on e.campaign_id = c.id
+         left join prospection_messages m on m.campaign_id = c.id
+        where lower(c.name) like any (array['%teste%','%test%','%dry-run%','%dryrun%','%mock%','%sample%'])
+           or e.event_type like '%dry_run%'
+           or e.metadata::text ilike any (array['%dryrun%','%dry-run%','%mock%','%sample%','%leads_teste%'])
+           or m.status = 'dry_run'`,
+    )
+    const ids = campaignRows.map((row) => row.id)
+    if (!ids.length) return { campaigns: 0, leads: 0, messages: 0, events: 0, optouts: 0 }
+    const events = await tx.query<{ count: string }>(`delete from prospection_events where campaign_id = any($1::uuid[]) returning 1`, [ids])
+    const messages = await tx.query<{ count: string }>(`delete from prospection_messages where campaign_id = any($1::uuid[]) returning 1`, [ids])
+    const leads = await tx.query<{ count: string }>(`delete from prospection_leads where campaign_id = any($1::uuid[]) returning 1`, [ids])
+    const campaigns = await tx.query<{ count: string }>(`delete from prospection_campaigns where id = any($1::uuid[]) returning 1`, [ids])
+    return {
+      campaigns: campaigns.length,
+      leads: leads.length,
+      messages: messages.length,
+      events: events.length,
+      optouts: 0,
+    }
   })
 }
 

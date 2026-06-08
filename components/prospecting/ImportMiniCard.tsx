@@ -3,13 +3,18 @@
 import { useRef, useState } from "react"
 
 interface Props {
-  onConfirmImport: (file: File) => Promise<{
+  onConfirmImport: (file: File, forceTestReimport?: boolean) => Promise<{
     imported: number
     valid: number
     queued: number
     duplicates: number
     invalid: number
     optOutIgnored: number
+    alreadySent: number
+    activeClientsBlocked: number
+    errors: number
+    testReimports: number
+    details?: Array<{ name: string; phoneE164: string; reason: string; queued: boolean }>
   } | null>
 }
 
@@ -19,6 +24,10 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
   const [summary, setSummary] = useState<Awaited<ReturnType<Props["onConfirmImport"]>>>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [forceLoading, setForceLoading] = useState(false)
+
+  const blocked = Boolean(summary && summary.imported > 0 && summary.queued === 0)
+  const firstReason = summary?.details?.find((detail) => !detail.queued)?.reason
 
   const handlePick = () => inputRef.current?.click()
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,11 +80,28 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
           )}
         </button>
         {summary && (
-          <div className="grid grid-cols-4 gap-1 text-center text-[10px]">
-            <span className="rounded bg-secondary px-1 py-1 text-foreground">{summary.valid} validos</span>
-            <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.duplicates} dup.</span>
-            <span className="rounded bg-secondary px-1 py-1 text-destructive">{summary.invalid} inval.</span>
-            <span className="rounded bg-secondary px-1 py-1 text-[var(--warning)]">{summary.optOutIgnored} opt-out</span>
+          <div className="space-y-1 text-[10px]">
+            <div className="grid grid-cols-3 gap-1 text-center">
+              <span className="rounded bg-secondary px-1 py-1 text-foreground">{summary.imported} lidos</span>
+              <span className="rounded bg-secondary px-1 py-1 text-foreground">{summary.valid} validos</span>
+              <span className="rounded bg-secondary px-1 py-1 text-[var(--success)]">{summary.queued} fila</span>
+              <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.duplicates} dup.</span>
+              <span className="rounded bg-secondary px-1 py-1 text-destructive">{summary.invalid} inval.</span>
+              <span className="rounded bg-secondary px-1 py-1 text-[var(--warning)]">{summary.optOutIgnored} opt-out</span>
+              <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.alreadySent} ja enviados</span>
+              <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.activeClientsBlocked} clientes</span>
+              <span className="rounded bg-secondary px-1 py-1 text-destructive">{summary.errors} erros</span>
+            </div>
+            {firstReason && (
+              <p className="rounded border border-border bg-[oklch(0.16_0.011_243)] px-2 py-1 text-muted-foreground">
+                {summary.details?.[0]?.name || "Lead"}: {firstReason}
+              </p>
+            )}
+            {summary.testReimports > 0 && (
+              <p className="rounded bg-[var(--success)]/15 px-2 py-1 text-[var(--success)]">
+                {summary.testReimports} reimportado como teste autorizado.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -98,6 +124,22 @@ export function ImportMiniCard({ onConfirmImport }: Props) {
       >
         {loading ? "Importando..." : confirmed ? "Importação confirmada" : "Confirmar importação"}
       </button>
+      {blocked && (
+        <button
+          onClick={async () => {
+            if (!file) return
+            setForceLoading(true)
+            const result = await onConfirmImport(file, true)
+            setSummary(result)
+            setConfirmed(true)
+            setForceLoading(false)
+          }}
+          disabled={!file || forceLoading}
+          className="mt-1 w-full rounded-md border border-border py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+        >
+          {forceLoading ? "Reimportando..." : "Reimportar teste autorizado"}
+        </button>
+      )}
     </section>
   )
 }

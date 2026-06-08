@@ -6,6 +6,7 @@ import { normalizePhone } from './phone'
 import { defaultTemplates, renderTemplate } from './templates'
 import type {
   ImportSummary,
+  ImportRowsOptions,
   LeadStatus,
   ProspectionCampaign,
   ProspectionDb,
@@ -27,6 +28,7 @@ const emptyDb = (): ProspectionDb => ({
 
 const id = () => crypto.randomUUID()
 const now = () => new Date().toISOString()
+const authorizedTestReimportPhones = new Set(['5522988473304', '5522988345946'])
 
 function storagePath() {
   const configured = getProspectionConfig().storageFile
@@ -130,6 +132,9 @@ export async function updateCampaignStatus(campaignId: string, status: Prospecti
   return withLock(async (db) => {
     const campaign = db.campaigns.find((item) => item.id === campaignId)
     if (!campaign) throw new Error('Campanha nao encontrada.')
+    if (status === 'running' && !db.leads.some((lead) => lead.campaign_id === campaignId && ['queued', 'scheduled', 'sending'].includes(lead.status))) {
+      status = 'completed'
+    }
     campaign.status = status
     campaign.updated_at = now()
     if (status === 'running') {
@@ -164,6 +169,38 @@ export async function updateTemplate(templateId: number, patch: Partial<Prospect
 
 function event(db: ProspectionDb, input: Omit<ProspectionEvent, 'id' | 'created_at'>) {
   db.events.unshift({ id: id(), created_at: now(), ...input })
+}
+
+function emptyImportSummary(imported: number, campaignId: string): ImportSummary {
+  return {
+    imported,
+    valid: 0,
+    queued: 0,
+    duplicates: 0,
+    invalid: 0,
+    optOutIgnored: 0,
+    alreadySent: 0,
+    activeClientsBlocked: 0,
+    errors: 0,
+    testReimports: 0,
+    campaignId,
+    details: [],
+  }
+}
+
+function addImportDetail(
+  summary: ImportSummary,
+  input: { row: number; name: string; phoneRaw: string; phoneE164: string; status: LeadStatus; reason: string; queued?: boolean },
+) {
+  summary.details.push({
+    row: input.row,
+    name: input.name,
+    phoneRaw: input.phoneRaw,
+    phoneE164: input.phoneE164,
+    status: input.status,
+    reason: input.reason,
+    queued: Boolean(input.queued),
+  })
 }
 
 export async function isActiveClient(phone: string) {
@@ -202,8 +239,10 @@ function pick(row: Record<string, unknown>, aliases: string[]) {
   return key ? String(row[key] || '').trim() : ''
 }
 
-export async function importRows(rows: Array<Record<string, unknown>>, sourceFileName: string, campaignId?: string): Promise<ImportSummary> {
-  if (postgresBackend.isEnabled()) return postgresBackend.importRows(rows, sourceFileName, campaignId)
+export async function importRows(rows: Array<Record<string, unknown>>, sourceFileName: string, options?: string | ImportRowsOptions): Promise<ImportSummary> {
+  if (postgresBackend.isEnabled()) return postgresBackend.importRows(rows, sourceFileName, options)
+  const campaignId = typeof options === 'string' ? options : options?.campaignId
+  const forceTestReimport = typeof options === 'object' ? Boolean(options.forceTestReimport) : false
   const campaign = campaignId ? (await readDb()).campaigns.find((item) => item.id === campaignId) : await getOrCreateDraftCampaign()
   if (!campaign) throw new Error('Campanha nao encontrada.')
 
@@ -214,51 +253,59 @@ export async function importRows(rows: Array<Record<string, unknown>>, sourceFil
   }
 
   return withLock(async (db) => {
-    const summary: ImportSummary = {
-      imported: rows.length,
-      valid: 0,
-      queued: 0,
-      duplicates: 0,
-      invalid: 0,
-      optOutIgnored: 0,
-      alreadySent: 0,
-      activeClientsBlocked: 0,
-      campaignId: campaign.id,
-    }
+    const summary = emptyImportSummary(rows.length, campaign.id)
     const seenInFile = new Set<string>()
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
       const name = pick(row, ['Nome', 'name', 'cliente', 'contato'])
       const phoneRaw = pick(row, ['Telefone 1', 'Telefone', 'Celular', 'WhatsApp', 'phone'])
       const phone = normalizePhone(phoneRaw)
+      const canForceTestReimport = forceTestReimport && authorizedTestReimportPhones.has(phone)
       const base = baseLead(campaign.id, name, phoneRaw, phone, sourceFileName, row)
+      if (canForceTestReimport) base.metadata.forceTestReimport = true
       if (!phone) {
         base.status = 'invalid_phone'
         base.error_message = 'Telefone invalido.'
         summary.invalid += 1
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'invalid_phone', reason: base.error_message })
       } else if (seenInFile.has(phone)) {
         base.status = 'duplicate'
         base.error_message = 'Telefone duplicado ou ja importado.'
         summary.duplicates += 1
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: 'Telefone duplicado dentro do arquivo.' })
       } else if (db.optouts.some((optout) => optout.phone_e164 === phone)) {
         base.status = 'opt_out'
         base.error_message = 'Telefone em opt-out global.'
         summary.optOutIgnored += 1
-      } else if (db.leads.some((lead) => lead.phone_e164 === phone && !['invalid_phone', 'duplicate'].includes(lead.status))) {
-        base.status = 'duplicate'
-        base.error_message = 'Telefone duplicado ou ja importado.'
-        summary.duplicates += 1
-      } else if (db.messages.some((message) => message.direction === 'outbound' && db.leads.find((lead) => lead.id === message.lead_id)?.phone_e164 === phone)) {
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'opt_out', reason: base.error_message })
+      } else if (db.messages.some((message) => message.direction === 'outbound' && db.leads.find((lead) => lead.id === message.lead_id)?.phone_e164 === phone) && !canForceTestReimport) {
         base.status = 'duplicate'
         base.error_message = 'Telefone ja recebeu abordagem anterior.'
         summary.alreadySent += 1
-      } else if (await activeClient(phone)) {
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: base.error_message })
+      } else if (db.leads.some((lead) => lead.phone_e164 === phone && !['invalid_phone', 'duplicate'].includes(lead.status)) && !canForceTestReimport) {
+        base.status = 'duplicate'
+        base.error_message = 'Telefone duplicado ou ja importado.'
+        summary.duplicates += 1
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: base.error_message })
+      } else if ((await activeClient(phone)) && !canForceTestReimport) {
         base.status = 'duplicate'
         base.error_message = 'Telefone ja consta como cliente ativo/teste ativo.'
         summary.activeClientsBlocked += 1
+        addImportDetail(summary, { row: index + 1, name, phoneRaw, phoneE164: phone, status: 'duplicate', reason: base.error_message })
       } else {
         base.status = 'queued'
         summary.valid += 1
         summary.queued += 1
+        if (canForceTestReimport) summary.testReimports += 1
+        addImportDetail(summary, {
+          row: index + 1,
+          name,
+          phoneRaw,
+          phoneE164: phone,
+          status: 'queued',
+          reason: canForceTestReimport ? 'Reimportado como teste autorizado.' : 'Adicionado a fila.',
+          queued: true,
+        })
       }
       seenInFile.add(phone)
       db.leads.unshift(base)
@@ -295,12 +342,29 @@ function baseLead(campaignId: string, name: string, phoneRaw: string, phone: str
   }
 }
 
-export async function listLeads(input?: { status?: string; page?: number; pageSize?: number }) {
+function selectedCampaign(db: ProspectionDb, campaignId?: string) {
+  if (campaignId) return db.campaigns.find((campaign) => campaign.id === campaignId) || null
+  for (const campaign of db.campaigns.filter((item) => ['running', 'paused', 'draft'].includes(item.status))) {
+    if (campaign.status === 'running' && !db.leads.some((lead) => lead.campaign_id === campaign.id && ['queued', 'scheduled', 'sending'].includes(lead.status))) {
+      campaign.status = 'completed'
+      campaign.next_send_after = null
+      campaign.updated_at = now()
+      continue
+    }
+    return campaign
+  }
+  return null
+}
+
+export async function listLeads(input?: { status?: string; campaignId?: string; page?: number; pageSize?: number }) {
   if (postgresBackend.isEnabled()) return postgresBackend.listLeads(input)
   const db = await readDb()
   const page = Math.max(1, input?.page || 1)
   const pageSize = Math.min(100, Math.max(1, input?.pageSize || 50))
-  const filtered = input?.status ? db.leads.filter((lead) => lead.status === input.status) : db.leads
+  const filtered = db.leads.filter((lead) =>
+    (!input?.status || lead.status === input.status) &&
+    (!input?.campaignId || lead.campaign_id === input.campaignId)
+  )
   return {
     items: filtered.slice((page - 1) * pageSize, page * pageSize),
     total: filtered.length,
@@ -309,36 +373,45 @@ export async function listLeads(input?: { status?: string; page?: number; pageSi
   }
 }
 
-export async function getQueueSummary() {
-  if (postgresBackend.isEnabled()) return postgresBackend.getQueueSummary()
+export async function getQueueSummary(input?: { campaignId?: string }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.getQueueSummary(input)
   const db = await readDb()
-  const activeCampaign = db.campaigns.find((campaign) => ['running', 'paused', 'draft'].includes(campaign.status)) || null
-  const current = db.leads.find((lead) => lead.status === 'sending') || null
+  const activeCampaign = selectedCampaign(db, input?.campaignId)
+  if (!activeCampaign) return { activeCampaign: null, current: null, upcoming: [], lastSent: null }
+  const current = db.leads.find((lead) => lead.campaign_id === activeCampaign.id && lead.status === 'sending') || null
   const upcoming = db.leads
-    .filter((lead) => ['queued', 'scheduled'].includes(lead.status))
+    .filter((lead) => lead.campaign_id === activeCampaign.id && ['queued', 'scheduled'].includes(lead.status))
     .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))
     .slice(0, 3)
   const lastOutbound = db.messages
-    .filter((message) => message.direction === 'outbound' && message.type === 'initial')
+    .filter((message) => message.campaign_id === activeCampaign.id && message.direction === 'outbound' && message.type === 'initial')
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]
   const lastSent = lastOutbound ? db.leads.find((lead) => lead.id === lastOutbound.lead_id) || null : null
   return { activeCampaign, current, upcoming, lastSent }
 }
 
-export async function getStatus() {
-  if (postgresBackend.isEnabled()) return postgresBackend.getStatus()
+export async function getStatus(input?: { campaignId?: string }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.getStatus(input)
   const db = await readDb()
-  const activeCampaign = db.campaigns.find((campaign) => ['running', 'paused', 'draft'].includes(campaign.status)) || null
+  const activeCampaign = selectedCampaign(db, input?.campaignId)
+  if (!activeCampaign) {
+    return {
+      stats: { imported: 0, queued: 0, sentToday: 0, responded: 0, optOut: 0, nextSend: null },
+      activeCampaign: null,
+      flags: getProspectionConfig(),
+    }
+  }
+  const campaignLeads = db.leads.filter((lead) => lead.campaign_id === activeCampaign.id)
   const today = new Date().toISOString().slice(0, 10)
   const stats = {
-    imported: db.leads.length,
-    queued: db.leads.filter((lead) => ['queued', 'scheduled'].includes(lead.status)).length,
-    sentToday: db.leads.filter((lead) => lead.sent_at?.startsWith(today)).length,
-    responded: db.leads.filter((lead) => ['responded', 'responded_positive'].includes(lead.status)).length,
-    optOut: db.leads.filter((lead) => lead.status === 'opt_out').length,
-    nextSend: db.leads
+    imported: campaignLeads.length,
+    queued: campaignLeads.filter((lead) => ['queued', 'scheduled'].includes(lead.status)).length,
+    sentToday: campaignLeads.filter((lead) => lead.sent_at?.startsWith(today)).length,
+    responded: campaignLeads.filter((lead) => ['responded', 'responded_positive'].includes(lead.status)).length,
+    optOut: campaignLeads.filter((lead) => lead.status === 'opt_out').length,
+    nextSend: campaignLeads
       .filter((lead) => ['scheduled', 'queued'].includes(lead.status))
-      .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))[0]?.scheduled_at || null,
+      .sort((a, b) => String(a.scheduled_at || a.created_at).localeCompare(String(b.scheduled_at || b.created_at)))[0]?.scheduled_at || campaignLeads.find((lead) => ['scheduled', 'queued'].includes(lead.status))?.created_at || null,
   }
   return { stats, activeCampaign, flags: getProspectionConfig() }
 }
@@ -387,7 +460,16 @@ export async function reserveNextLead() {
       .filter((lead) => lead.campaign_id === campaign.id && ['queued', 'scheduled'].includes(lead.status as LeadStatus))
       .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))
       .find((lead) => !lead.scheduled_at || new Date(lead.scheduled_at).getTime() <= Date.now())
-    if (!dueLead) return { ok: false, code: 'NO_DUE_LEAD' as const }
+    if (!dueLead) {
+      if (!db.leads.some((lead) => lead.campaign_id === campaign.id && ['queued', 'scheduled', 'sending'].includes(lead.status))) {
+        campaign.status = 'completed'
+        campaign.next_send_after = null
+        campaign.updated_at = now()
+        event(db, { campaign_id: campaign.id, event_type: 'campaign_completed', message: 'Campanha finalizada por fila vazia.', metadata: {} })
+        return { ok: false, code: 'QUEUE_EMPTY_COMPLETED' as const }
+      }
+      return { ok: false, code: 'NO_DUE_LEAD' as const }
+    }
     if (db.optouts.some((optout) => optout.phone_e164 === dueLead.phone_e164)) {
       dueLead.status = 'opt_out'
       dueLead.updated_at = now()
@@ -510,5 +592,40 @@ export async function recordInbound(input: { phone: string; text: string; classi
     }
     event(db, { campaign_id: lead?.campaign_id || null, lead_id: lead?.id || null, event_type: `inbound_${input.classification}`, message: 'Resposta recebida.', metadata: { device: input.device || null } })
     return { lead, message }
+  })
+}
+
+export async function cleanupTestDryRunData() {
+  if (postgresBackend.isEnabled()) return postgresBackend.cleanupTestDryRunData()
+  return withLock(async (db) => {
+    const testCampaignIds = new Set(
+      db.campaigns
+        .filter((campaign) => /teste|test|dry-run|dryrun|mock|sample/i.test(campaign.name))
+        .map((campaign) => campaign.id),
+    )
+    for (const message of db.messages) {
+      if (message.campaign_id && message.status === 'dry_run') testCampaignIds.add(message.campaign_id)
+    }
+    for (const eventItem of db.events) {
+      const marker = `${eventItem.event_type} ${JSON.stringify(eventItem.metadata)}`
+      if (eventItem.campaign_id && /dry_run|dry-run|dryrun|mock|sample|leads_teste/i.test(marker)) testCampaignIds.add(eventItem.campaign_id)
+    }
+    const before = {
+      campaigns: db.campaigns.length,
+      leads: db.leads.length,
+      messages: db.messages.length,
+      events: db.events.length,
+    }
+    db.campaigns = db.campaigns.filter((campaign) => !testCampaignIds.has(campaign.id))
+    db.leads = db.leads.filter((lead) => !testCampaignIds.has(lead.campaign_id))
+    db.messages = db.messages.filter((message) => !message.campaign_id || !testCampaignIds.has(message.campaign_id))
+    db.events = db.events.filter((eventItem) => !eventItem.campaign_id || !testCampaignIds.has(eventItem.campaign_id))
+    return {
+      campaigns: before.campaigns - db.campaigns.length,
+      leads: before.leads - db.leads.length,
+      messages: before.messages - db.messages.length,
+      events: before.events - db.events.length,
+      optouts: 0,
+    }
   })
 }

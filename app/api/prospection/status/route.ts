@@ -3,10 +3,12 @@ import { getSafetyFlags } from '@/lib/prospection/config'
 import { getWhatsappStatus } from '@/lib/prospection/evolution'
 import { getQueueSummary, getStatus, secondsUntilNext } from '@/lib/prospection/store'
 
-export async function GET() {
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const campaignId = url.searchParams.get('campaign_id') || url.searchParams.get('campaignId') || undefined
   const [status, queue, whatsapp] = await Promise.all([
-    getStatus(),
-    getQueueSummary(),
+    getStatus({ campaignId }),
+    getQueueSummary({ campaignId }),
     getWhatsappStatus(),
   ])
   return NextResponse.json({

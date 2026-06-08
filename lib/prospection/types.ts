@@ -115,5 +115,21 @@ export interface ImportSummary {
   optOutIgnored: number
   alreadySent: number
   activeClientsBlocked: number
+  errors: number
+  testReimports: number
   campaignId: string
+  details: Array<{
+    row: number
+    name: string
+    phoneRaw: string
+    phoneE164: string
+    status: LeadStatus
+    reason: string
+    queued: boolean
+  }>
+}
+
+export interface ImportRowsOptions {
+  campaignId?: string
+  forceTestReimport?: boolean
 }

@@ -13,7 +13,7 @@ async function tick() {
     const payload = await response.json().catch(() => ({}))
     if (payload?.ok) {
       console.log(`[prospection-worker] ${new Date().toISOString()} ${payload.code}`)
-    } else if (!['NO_RUNNING_CAMPAIGN', 'NO_DUE_LEAD', 'OUTSIDE_ALLOWED_WINDOW', 'RATE_LIMITED', 'LEAD_OPT_OUT'].includes(String(payload?.code || ''))) {
+    } else if (!['NO_RUNNING_CAMPAIGN', 'NO_DUE_LEAD', 'OUTSIDE_ALLOWED_WINDOW', 'RATE_LIMITED', 'LEAD_OPT_OUT', 'QUEUE_EMPTY_COMPLETED'].includes(String(payload?.code || ''))) {
       console.log(`[prospection-worker] ${new Date().toISOString()} ${payload?.code || response.status}`)
     }
   } catch (error) {

@@ -7,10 +7,11 @@ interface Props {
   upNext: Lead[]
   lastSent: Lead | null
   isRunning: boolean
+  emptyLabel: string
   onViewHistory: () => void
 }
 
-export function QueueMiniCard({ current, upNext, lastSent, isRunning, onViewHistory }: Props) {
+export function QueueMiniCard({ current, upNext, lastSent, isRunning, emptyLabel, onViewHistory }: Props) {
   return (
     <section className="flex h-full flex-col rounded-lg border border-border bg-card p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -45,7 +46,7 @@ export function QueueMiniCard({ current, upNext, lastSent, isRunning, onViewHist
                   : "bg-muted text-muted-foreground"
               }`}
             >
-              {isRunning && current ? "Enviando" : "Parado"}
+              {isRunning && current ? "Simulando" : upNext.length ? "Aguardando" : "Fila vazia"}
             </span>
           </div>
           <div className="mt-1.5 flex items-center gap-2">
@@ -61,7 +62,7 @@ export function QueueMiniCard({ current, upNext, lastSent, isRunning, onViewHist
               </>
             ) : (
               <span className="text-sm font-medium text-muted-foreground">
-                Campanha parada
+                {emptyLabel}
               </span>
             )}
           </div>
@@ -91,6 +92,11 @@ export function QueueMiniCard({ current, upNext, lastSent, isRunning, onViewHist
                 )}
               </li>
             ))}
+            {!upNext.length && (
+              <li className="rounded bg-secondary px-2 py-1.5 text-[11px] text-muted-foreground">
+                Nenhum lead aguardando.
+              </li>
+            )}
           </ul>
         </div>
 
