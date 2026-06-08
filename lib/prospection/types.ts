@@ -6,6 +6,7 @@ export type LeadStatus =
   | 'scheduled'
   | 'sending'
   | 'sent'
+  | 'dry_run_sent'
   | 'responded'
   | 'responded_positive'
   | 'opt_out'

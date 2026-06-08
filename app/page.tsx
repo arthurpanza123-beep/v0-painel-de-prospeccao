@@ -153,7 +153,7 @@ export default function ProspectingPage() {
     : campaignStatus === "waiting_for_leads"
     ? "Fila vazia"
     : campaignStatus === "completed"
-    ? "Finalizada"
+    ? "Simulação finalizada"
     : campaignStatus === "cancelled"
     ? "Cancelada"
     : "Rascunho"
@@ -178,6 +178,8 @@ export default function ProspectingPage() {
     ? `${nextLeadName} · próximo ao retomar`
     : campaignStatus === "ready" && nextLeadName
     ? `${nextLeadName} · pronta para simulação`
+    : campaignStatus === "completed" && queue.lastSent?.nome
+    ? `${queue.lastSent.nome} · nenhum WhatsApp real enviado`
     : runtime.isDryRun
     ? "Modo seguro"
     : "Envio real"
@@ -336,6 +338,17 @@ export default function ProspectingPage() {
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/cancel`, { method: "POST" })
     await refresh()
   }
+  const handleSimulateNow = async () => {
+    if (!activeCampaignId) return
+    if (!(await askConfirmation({
+      title: "Simular próximo envio?",
+      text: "Isso vai processar o próximo lead em modo seguro. Nenhum WhatsApp real será enviado.",
+      cancelLabel: "Cancelar",
+      confirmLabel: "Simular agora",
+    }))) return
+    await fetch(`/api/prospection/send-next?force=true&campaignId=${encodeURIComponent(activeCampaignId)}`, { method: "POST" })
+    await refresh()
+  }
   const handleImportLeadsAction = () => {
     setMobileTab("importar")
   }
@@ -444,19 +457,30 @@ export default function ProspectingPage() {
             >
               Configurar WhatsApp
             </button>
-            <button
-              onClick={handleNewCampaign}
-              className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <span className="hidden sm:inline">Nova campanha</span>
-              <span className="sm:hidden">Nova</span>
-            </button>
+            {!["no_campaign", "completed", "cancelled"].includes(campaignStatus) && (
+              <button
+                onClick={handleNewCampaign}
+                className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <span className="hidden sm:inline">Nova campanha</span>
+                <span className="sm:hidden">Nova</span>
+              </button>
+            )}
             {activeCampaignId && ["paused", "ready", "draft", "waiting_for_leads"].includes(campaignStatus) && (
               <button
                 onClick={handleCancel}
                 className="hidden rounded-md border border-destructive/30 px-2.5 py-1.5 text-[11px] font-medium text-destructive/80 transition-colors hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
               >
                 Cancelar
+              </button>
+            )}
+            {activeCampaignId && ["ready", "running_dry_run"].includes(campaignStatus) && (
+              <button
+                onClick={handleSimulateNow}
+                className="rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                <span className="hidden sm:inline">Simular agora</span>
+                <span className="sm:hidden">Simular</span>
               </button>
             )}
             {isRunning && (

@@ -2,8 +2,8 @@ import { getProspectionConfig } from './config'
 import { sendProspectionText } from './evolution'
 import { completeSend, failSend, reserveNextLead } from './store'
 
-export async function sendNextProspectionLead() {
-  const reserved = await reserveNextLead()
+export async function sendNextProspectionLead(input?: { force?: boolean; campaignId?: string }) {
+  const reserved = await reserveNextLead(input)
   if (!reserved.ok) return reserved
   const { campaign, lead } = reserved
   if (!campaign || !lead) return { ok: false, code: 'RESERVATION_INCOMPLETE' }

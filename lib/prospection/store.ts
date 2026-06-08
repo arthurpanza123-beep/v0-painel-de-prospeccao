@@ -370,7 +370,7 @@ function selectedCampaign(db: ProspectionDb, campaignId?: string) {
     }
     return campaign
   }
-  return null
+  return db.campaigns.find((campaign) => ['completed', 'cancelled'].includes(campaign.status)) || null
 }
 
 export async function listLeads(input?: { status?: string; campaignId?: string; page?: number; pageSize?: number }) {
@@ -450,12 +450,15 @@ function isWithinAllowedWindow(campaign: ProspectionCampaign, date = new Date())
   return current >= campaign.allowed_start_time && current <= campaign.allowed_end_time
 }
 
-export async function reserveNextLead() {
-  if (postgresBackend.isEnabled()) return postgresBackend.reserveNextLead()
+export async function reserveNextLead(input?: { force?: boolean; campaignId?: string }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.reserveNextLead(input)
   return withLock(async (db) => {
-    const campaign = db.campaigns.find((item) => item.status === 'running')
+    const campaign = input?.campaignId
+      ? db.campaigns.find((item) => item.id === input.campaignId && ['running', 'draft', 'paused'].includes(item.status))
+      : db.campaigns.find((item) => input?.force ? ['running', 'draft', 'paused'].includes(item.status) : item.status === 'running')
     if (!campaign) return { ok: false, code: 'NO_RUNNING_CAMPAIGN' as const }
-    if (!isWithinAllowedWindow(campaign)) return { ok: false, code: 'OUTSIDE_ALLOWED_WINDOW' as const }
+    if (!input?.force && campaign.status !== 'running') return { ok: false, code: 'NO_RUNNING_CAMPAIGN' as const }
+    if (!input?.force && !isWithinAllowedWindow(campaign)) return { ok: false, code: 'OUTSIDE_ALLOWED_WINDOW' as const }
 
     const cutoff = new Date(Date.now() - campaign.rate_limit_window_minutes * 60 * 1000).toISOString()
     const sentInWindow = db.messages.filter((message) =>
@@ -476,7 +479,7 @@ export async function reserveNextLead() {
     const dueLead = db.leads
       .filter((lead) => lead.campaign_id === campaign.id && ['queued', 'scheduled'].includes(lead.status as LeadStatus))
       .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))
-      .find((lead) => !lead.scheduled_at || new Date(lead.scheduled_at).getTime() <= Date.now())
+      .find((lead) => input?.force || !lead.scheduled_at || new Date(lead.scheduled_at).getTime() <= Date.now())
     if (!dueLead) {
       if (!db.leads.some((lead) => lead.campaign_id === campaign.id && ['queued', 'scheduled', 'sending'].includes(lead.status))) {
         campaign.status = 'completed'
@@ -487,6 +490,7 @@ export async function reserveNextLead() {
       }
       return { ok: false, code: 'NO_DUE_LEAD' as const }
     }
+    event(db, { campaign_id: campaign.id, lead_id: dueLead.id, event_type: 'NEXT_SEND_DUE', message: 'Proximo lead liberado para processamento.', metadata: { force: Boolean(input?.force), scheduledAt: dueLead.scheduled_at || null } })
     if (db.optouts.some((optout) => optout.phone_e164 === dueLead.phone_e164)) {
       dueLead.status = 'opt_out'
       dueLead.updated_at = now()
@@ -500,6 +504,9 @@ export async function reserveNextLead() {
     dueLead.send_attempts += 1
     dueLead.updated_at = now()
     event(db, { campaign_id: campaign.id, lead_id: dueLead.id, event_type: 'LEAD_RESERVED', message: 'Lead reservado para simulacao.', metadata: { templateId: template.id } })
+    if (getProspectionConfig().dryRun || !getProspectionConfig().enabled) {
+      event(db, { campaign_id: campaign.id, lead_id: dueLead.id, event_type: 'LEAD_DRY_RUN_PROCESSING', message: 'Lead em processamento simulado.', metadata: { templateId: template.id, force: Boolean(input?.force) } })
+    }
     return { ok: true, campaign, lead: dueLead, template }
   })
 }
@@ -518,7 +525,7 @@ export async function completeSend(input: {
     const campaign = db.campaigns.find((item) => item.id === input.campaignId)
     if (!lead || !campaign) throw new Error('Lead/campanha nao encontrado.')
     const timestamp = now()
-    lead.status = 'sent'
+    lead.status = input.status === 'dry_run' ? 'dry_run_sent' : 'sent'
     lead.sent_at = timestamp
     lead.updated_at = timestamp
     lead.error_message = null
@@ -536,6 +543,9 @@ export async function completeSend(input: {
       created_at: timestamp,
     }
     db.messages.unshift(message)
+    if (input.status === 'dry_run') {
+      event(db, { campaign_id: campaign.id, lead_id: lead.id, event_type: 'WORKER_SKIPPED_REAL_DISABLED', message: 'Envio real bloqueado; simulacao gravada.', metadata: { dryRun: true, evolutionMessageId: null } })
+    }
     const nextLead = db.leads.find((item) => item.campaign_id === campaign.id && item.status === 'queued')
     if (nextLead) {
       nextLead.status = 'scheduled'
@@ -549,6 +559,7 @@ export async function completeSend(input: {
       if (!db.leads.some((item) => item.campaign_id === campaign.id && ['queued', 'scheduled', 'sending'].includes(item.status))) {
         campaign.status = 'completed'
         event(db, { campaign_id: campaign.id, event_type: 'QUEUE_EMPTY', message: 'Fila finalizada sem leads pendentes.', metadata: {} })
+        event(db, { campaign_id: campaign.id, event_type: 'CAMPAIGN_COMPLETED', message: 'Campanha finalizada apos processar a fila.', metadata: {} })
       }
     }
     campaign.updated_at = timestamp
@@ -566,6 +577,7 @@ export async function failSend(input: { campaignId: string; leadId: string; erro
     lead.error_message = input.error
     lead.updated_at = now()
     event(db, { campaign_id: input.campaignId, lead_id: input.leadId, event_type: 'send_error', message: 'Falha ao enviar abordagem.', metadata: { error: input.error } })
+    event(db, { campaign_id: input.campaignId, lead_id: input.leadId, event_type: 'WORKER_ERROR', message: 'Erro no processamento do worker.', metadata: { error: input.error } })
     return lead
   })
 }

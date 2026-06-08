@@ -63,7 +63,7 @@ export async function GET(request: Request) {
       : campaignStatus === 'waiting_for_leads'
       ? 'Fila vazia'
       : campaignStatus === 'completed'
-      ? 'Finalizada'
+      ? 'Simulação finalizada'
       : campaignStatus === 'cancelled'
       ? 'Cancelada'
       : campaignStatus === 'draft'
