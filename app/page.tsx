@@ -31,94 +31,46 @@ export default function ProspectingPage() {
   const [sendingRate, setSendingRate] = useState(mockSendingRate)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
 
-  // Handlers — sem backend, apenas estado visual
-  const handleStartCampaign = () => {
-    console.log("[v0] Iniciar campanha")
-    setCampaignStatus("rodando")
-  }
-
-  const handlePauseCampaign = () => {
-    console.log("[v0] Pausar campanha")
-    setCampaignStatus("pausada")
-  }
-
-  const handleResumeCampaign = () => {
-    console.log("[v0] Retomar campanha")
-    setCampaignStatus("rodando")
-  }
-
-  const handleCancelCampaign = () => {
-    console.log("[v0] Cancelar campanha")
-    setCampaignStatus("parada")
-  }
+  const handleStartCampaign = () => setCampaignStatus("rodando")
+  const handlePauseCampaign = () => setCampaignStatus("pausada")
+  const handleResumeCampaign = () => setCampaignStatus("rodando")
+  const handleCancelCampaign = () => setCampaignStatus("parada")
+  const handleNewCampaign = () => setCampaignStatus("parada")
 
   const handleConfigureWhatsApp = () => {
-    console.log("[v0] Configurar WhatsApp")
     setWhatsappStatus("conectando")
     setTimeout(() => setWhatsappStatus("conectado"), 2500)
   }
 
-  const handleNewCampaign = () => {
-    console.log("[v0] Nova campanha")
-    setCampaignStatus("parada")
-  }
+  const handleRefreshQR = () => {}
+  const handleDisconnect = () => setWhatsappStatus("desconectado")
+  const handleSwapNumber = () => {}
+  const handleConfirmImport = () => {}
+  const handleSaveRate = (rate: SendingRate) => setSendingRate(rate)
 
-  const handleRefreshQR = () => {
-    console.log("[v0] Atualizar QR Code")
-  }
-
-  const handleDisconnect = () => {
-    console.log("[v0] Desconectar WhatsApp")
-    setWhatsappStatus("desconectado")
-  }
-
-  const handleSwapNumber = () => {
-    console.log("[v0] Trocar número")
-  }
-
-  const handleConfirmImport = () => {
-    console.log("[v0] Confirmar importação de leads")
-  }
-
-  const handleSaveRate = (rate: SendingRate) => {
-    console.log("[v0] Salvar ritmo", rate)
-    setSendingRate(rate)
-  }
-
-  const handleViewMessage = (lead: Lead) => {
-    console.log("[v0] Ver mensagem para", lead.nome)
-    setSelectedLead(lead)
-  }
-
-  const handleMarkDoNotSend = (lead: Lead) => {
-    console.log("[v0] Marcar não enviar", lead.nome)
+  const handleViewMessage = (lead: Lead) => setSelectedLead(lead)
+  const handleMarkDoNotSend = (lead: Lead) =>
     setLeads((prev) =>
       prev.map((l) => (l.id === lead.id ? { ...l, status: "nao-quero" as const } : l))
     )
-  }
-
-  const handleRemoveFromQueue = (lead: Lead) => {
-    console.log("[v0] Remover da fila", lead.nome)
+  const handleRemoveFromQueue = (lead: Lead) =>
     setLeads((prev) => prev.filter((l) => l.id !== lead.id))
-  }
-
-  const handleExport = () => {
-    console.log("[v0] Exportar resultados")
-  }
+  const handleExport = () => {}
 
   const isRunning = campaignStatus === "rodando"
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Topbar da marca */}
-      <div className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur">
-        <div className="mx-auto max-w-screen-xl px-4 sm:px-6 lg:px-8">
-          <div className="flex h-12 items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary">
+      {/* Topbar */}
+      <div className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="mx-auto max-w-screen-xl px-4 sm:px-6">
+          <div className="flex h-11 items-center gap-3">
+            {/* Logo */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="flex h-5 w-5 items-center justify-center rounded bg-primary">
                 <svg
-                  width="13"
-                  height="13"
+                  width="10"
+                  height="10"
                   viewBox="0 0 24 24"
                   fill="currentColor"
                   className="text-primary-foreground"
@@ -127,39 +79,38 @@ export default function ProspectingPage() {
                   <polygon points="5 3 19 12 5 21 5 3" />
                 </svg>
               </div>
-              <span className="text-sm font-semibold text-foreground">Central Play Plus</span>
+              <span className="text-xs font-bold tracking-wide text-foreground uppercase">
+                Central Play Plus
+              </span>
             </div>
-            <span className="text-border hidden sm:block">|</span>
-            <nav
-              className="hidden items-center gap-1 sm:flex"
-              aria-label="Navegação principal"
-            >
-              {["Dashboard", "Prospecção", "Instâncias", "Templates", "Relatórios"].map(
-                (item) => (
-                  <button
-                    key={item}
-                    className={`rounded-md px-3 py-1 text-xs transition-colors ${
-                      item === "Prospecção"
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    }`}
-                  >
-                    {item}
-                  </button>
-                )
-              )}
+
+            <div className="h-3.5 w-px bg-border hidden sm:block" aria-hidden="true" />
+
+            {/* Nav */}
+            <nav className="hidden items-center gap-0.5 sm:flex" aria-label="Navegação principal">
+              {["Dashboard", "Prospecção", "Instâncias", "Templates", "Relatórios"].map((item) => (
+                <button
+                  key={item}
+                  className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    item === "Prospecção"
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
             </nav>
-            {/* Status indicador mobile */}
-            <div className="ml-auto flex items-center gap-2 sm:hidden">
+
+            {/* Status badge mobile */}
+            <div className="ml-auto sm:hidden">
               <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                  isRunning
-                    ? "bg-primary/10 text-primary"
-                    : "bg-muted text-muted-foreground"
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  isRunning ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground"
                 }`}
               >
                 <span
-                  className={`h-1.5 w-1.5 rounded-full ${
+                  className={`h-1 w-1 rounded-full ${
                     isRunning ? "bg-primary animate-pulse" : "bg-muted-foreground"
                   }`}
                 />
@@ -171,8 +122,7 @@ export default function ProspectingPage() {
       </div>
 
       {/* Conteúdo principal */}
-      <main className="mx-auto max-w-screen-xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Header */}
+      <main className="mx-auto max-w-screen-xl px-4 py-6 sm:px-6">
         <ProspectingHeader
           whatsappStatus={whatsappStatus}
           campaignStatus={campaignStatus}
@@ -184,12 +134,11 @@ export default function ProspectingPage() {
           onNewCampaign={handleNewCampaign}
         />
 
-        {/* Cards de estatísticas */}
         <StatCards stats={stats} />
 
-        {/* Card "Agora enviando" — só aparece quando rodando */}
+        {/* Agora enviando — só aparece quando rodando */}
         {isRunning && (
-          <div className="mb-6">
+          <div className="mb-5">
             <CurrentSendingCard
               lead={mockCurrentSending.lead}
               template={mockTemplates[mockCurrentSending.templateIndex]}
@@ -199,8 +148,8 @@ export default function ProspectingPage() {
           </div>
         )}
 
-        {/* Grid de 3 colunas: QR Code + Import + Configuração */}
-        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* Grid: QR Code + Import + Ritmo */}
+        <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
           <WhatsAppConnectionCard
             status={whatsappStatus}
             onRefreshQR={handleRefreshQR}
@@ -211,13 +160,13 @@ export default function ProspectingPage() {
           <SendingRateCard initialRate={sendingRate} onSave={handleSaveRate} />
         </div>
 
-        {/* Templates de mensagem */}
-        <div className="mb-6">
+        {/* Templates */}
+        <div className="mb-5">
           <MessageTemplatesCard templates={mockTemplates} />
         </div>
 
-        {/* Fila de leads */}
-        <div className="mb-6">
+        {/* Fila */}
+        <div className="mb-5">
           <LeadQueueCard
             leads={leads}
             onViewMessage={handleViewMessage}
@@ -232,57 +181,42 @@ export default function ProspectingPage() {
         </div>
       </main>
 
-      {/* Modal de visualização de mensagem */}
+      {/* Modal ver mensagem */}
       {selectedLead && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
           role="dialog"
           aria-modal="true"
           aria-label="Visualizar mensagem"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setSelectedLead(null)
-          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setSelectedLead(null) }}
         >
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl flex flex-col gap-4">
+          <div className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-2xl flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <h3 className="text-sm font-semibold text-foreground">
-                  Mensagem para {selectedLead.nome}
-                </h3>
-                <span className="text-xs text-muted-foreground font-mono">
-                  {selectedLead.telefone}
-                </span>
+              <div>
+                <p className="text-sm font-semibold text-foreground">{selectedLead.nome}</p>
+                <p className="text-xs text-muted-foreground font-mono mt-0.5">{selectedLead.telefone}</p>
               </div>
               <button
                 onClick={() => setSelectedLead(null)}
-                className="text-muted-foreground hover:text-foreground transition-colors rounded-md p-1 hover:bg-muted"
-                aria-label="Fechar modal"
+                className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                aria-label="Fechar"
               >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  aria-hidden="true"
-                >
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
               </button>
             </div>
-            <div className="rounded-lg border border-border bg-secondary p-4 font-mono text-xs text-muted-foreground leading-relaxed max-h-72 overflow-y-auto">
+
+            {/* Bolha WhatsApp dark */}
+            <div className="rounded-lg bg-[oklch(0.19_0.013_243)] px-4 py-3 font-mono text-xs leading-6 text-muted-foreground max-h-64 overflow-y-auto">
               {mockTemplates[selectedLead.templateIndex]?.corpo
                 .replace(/{{nome}}/g, selectedLead.nome)
                 .split("\n\n")
                 .map((para, i) => (
-                  <p key={i} className="leading-6 mb-3 last:mb-0">
+                  <p key={i} className="mb-2.5 last:mb-0">
                     {para.split(/(\*[^*]+\*)/).map((part, j) =>
                       part.startsWith("*") && part.endsWith("*") ? (
-                        <strong key={j} className="font-semibold text-foreground">
-                          {part.slice(1, -1)}
-                        </strong>
+                        <strong key={j} className="font-semibold text-foreground">{part.slice(1, -1)}</strong>
                       ) : (
                         <span key={j}>{part}</span>
                       )
@@ -290,9 +224,10 @@ export default function ProspectingPage() {
                   </p>
                 ))}
             </div>
+
             <button
               onClick={() => setSelectedLead(null)}
-              className="w-full rounded-md bg-secondary border border-border py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+              className="w-full rounded bg-secondary py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
             >
               Fechar
             </button>
