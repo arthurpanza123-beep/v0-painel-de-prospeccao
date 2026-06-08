@@ -11,6 +11,17 @@ export type LeadStatus =
 
 export type CampaignStatus = "parada" | "rodando" | "pausada" | "concluida"
 
+/**
+ * Estado da simulação (modo seguro). Controla o botão principal único da tela.
+ * O Codex deve derivar isto de /api/prospection/status.
+ */
+export type SimStatus =
+  | "sem-campanha"
+  | "pronta"
+  | "simulando"
+  | "pausada"
+  | "finalizada"
+
 export type WhatsAppStatus = "desconectado" | "conectado" | "conectando"
 
 export interface Lead {
@@ -40,6 +51,21 @@ export interface CampaignStats {
   responderam: number
   optOut: number
   proximoEnvio: string
+}
+
+/** Resumo da importação (mostrado depois de confirmar). */
+export interface ImportSummary {
+  arquivo: string
+  lidos: number
+  adicionados: number
+  ignorados: number
+}
+
+export const mockImportSummary: ImportSummary = {
+  arquivo: "leads-novembro.xlsx",
+  lidos: 150,
+  adicionados: 142,
+  ignorados: 8,
 }
 
 export interface SendingRate {

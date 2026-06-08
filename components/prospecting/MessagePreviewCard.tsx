@@ -14,9 +14,9 @@ export function MessagePreviewCard({ templates, onEdit }: Props) {
   const sampleName = "Maria"
 
   return (
-    <section className="flex h-full flex-col rounded-lg border border-border bg-card p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <section className="flex h-full flex-col rounded-xl bg-card p-4">
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <h2 className="text-xs font-semibold text-muted-foreground">
           Mensagem inicial
         </h2>
         <button
@@ -51,9 +51,9 @@ export function MessagePreviewCard({ templates, onEdit }: Props) {
       </div>
 
       {/* Janela de chat WhatsApp */}
-      <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[oklch(0.115_0.013_243)]">
+      <div className="flex flex-1 flex-col overflow-hidden rounded-lg bg-[oklch(0.115_0.013_243)]">
         {/* Topo do chat */}
-        <div className="flex items-center gap-2 border-b border-border bg-[oklch(0.15_0.013_243)] px-2.5 py-1.5">
+        <div className="flex items-center gap-2 bg-[oklch(0.15_0.013_243)] px-2.5 py-1.5">
           <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--success)]/20 text-[10px] font-semibold text-[var(--success)]">
             {sampleName.charAt(0)}
           </span>

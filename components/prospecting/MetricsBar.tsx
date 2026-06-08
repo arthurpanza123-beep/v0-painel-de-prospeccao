@@ -1,28 +1,22 @@
-"use client"
-
 import type { CampaignStats } from "@/lib/mock-data"
 
 const items = (s: CampaignStats) => [
   { label: "Importados", value: s.leadsImportados, tone: "text-foreground" },
   { label: "Na fila", value: s.naFila, tone: "text-foreground" },
-  { label: "Enviadas hoje", value: s.enviadosHoje, tone: "text-primary" },
+  { label: "Simulados hoje", value: s.enviadosHoje, tone: "text-foreground" },
   { label: "Responderam", value: s.responderam, tone: "text-[var(--success)]" },
-  { label: "Próximo envio", value: s.proximoEnvio, tone: "text-[var(--warning)]", mono: true },
 ]
 
 export function MetricsBar({ stats }: { stats: CampaignStats }) {
   return (
-    <div className="grid grid-cols-5 gap-2">
+    <div className="grid grid-cols-4 gap-2 sm:gap-3">
       {items(stats).map((m) => (
-        <div
-          key={m.label}
-          className="rounded-md border border-border bg-card px-2 py-1.5 sm:px-3 sm:py-2"
-        >
-          <p className="truncate text-[9px] font-medium uppercase tracking-wide text-muted-foreground sm:text-[10px]">
-            {m.label}
-          </p>
-          <p className={`mt-0.5 text-sm font-bold leading-none tabular-nums sm:text-lg ${m.tone} ${m.mono ? "font-mono" : ""}`}>
+        <div key={m.label} className="rounded-xl bg-card px-3 py-2.5 sm:px-4 sm:py-3">
+          <p className={`text-xl font-bold leading-none tabular-nums sm:text-3xl ${m.tone}`}>
             {m.value}
+          </p>
+          <p className="mt-1 truncate text-[10px] font-medium text-muted-foreground sm:text-xs">
+            {m.label}
           </p>
         </div>
       ))}

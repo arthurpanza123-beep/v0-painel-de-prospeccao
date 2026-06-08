@@ -2,80 +2,187 @@
 
 import { useState } from "react"
 import { MetricsBar } from "@/components/prospecting/MetricsBar"
-import { WhatsAppMiniCard } from "@/components/prospecting/WhatsAppMiniCard"
-import { ImportMiniCard } from "@/components/prospecting/ImportMiniCard"
-import { RateMiniCard } from "@/components/prospecting/RateMiniCard"
+import { WhatsAppCard } from "@/components/prospecting/WhatsAppCard"
+import { ImportCard } from "@/components/prospecting/ImportCard"
+import { ControlCard } from "@/components/prospecting/ControlCard"
 import { MessagePreviewCard } from "@/components/prospecting/MessagePreviewCard"
 import { QueueMiniCard } from "@/components/prospecting/QueueMiniCard"
+import { ActionMenu, type MenuAction } from "@/components/prospecting/ActionMenu"
+import { ConfirmModal } from "@/components/prospecting/ConfirmModal"
 import {
   mockLeads,
   mockTemplates,
   mockCampaignStats,
   mockSendingRate,
-  type CampaignStatus,
+  mockImportSummary,
+  type SimStatus,
   type WhatsAppStatus,
-  type SendingRate,
+  type ImportSummary,
 } from "@/lib/mock-data"
 
-type MobileTab = "whatsapp" | "importar" | "ritmo" | "mensagem" | "fila"
+type ModalKind =
+  | null
+  | "iniciar"
+  | "pausar"
+  | "retomar"
+  | "cancelar"
+  | "nova"
+  | "resetar"
+
+const PRIMARY_LABEL: Record<SimStatus, string> = {
+  "sem-campanha": "Nova campanha",
+  pronta: "Iniciar simulação",
+  simulando: "Pausar",
+  pausada: "Retomar",
+  finalizada: "Nova campanha",
+}
 
 export default function ProspectingPage() {
-  const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
-  const [campaignStatus, setCampaignStatus] = useState<CampaignStatus>("parada")
-  const [sendingRate, setSendingRate] = useState(mockSendingRate)
-  const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
+  const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("conectado")
+  const [sim, setSim] = useState<SimStatus>("pronta")
+  const [rate] = useState(mockSendingRate)
+  const [rateChanged] = useState(false)
+  const [importSummary, setImportSummary] = useState<ImportSummary | null>(mockImportSummary)
+  const [modal, setModal] = useState<ModalKind>(null)
 
-  const isRunning = campaignStatus === "rodando"
-  const isPaused = campaignStatus === "pausada"
+  const isRunning = sim === "simulando"
 
-  const handleToggleCampaign = () =>
-    setCampaignStatus(isRunning ? "pausada" : "rodando")
-  const handlePause = () => setCampaignStatus("pausada")
+  // ── Derivações de fila (mock) ────────────────────────────────────────────
+  const current = mockLeads.find((l) => l.status === "proximo") ?? mockLeads[1]
+  const upNext = mockLeads.filter((l) => l.status === "aguardando")
+  const lastSent = mockLeads.filter((l) => l.status === "enviado").at(-1) ?? null
+  const simuladosCount = mockCampaignStats.enviadosHoje
+
+  // ── WhatsApp ───────────────────────────────────────────────────────────────
   const handleConfigureWhatsApp = () => {
     setWhatsappStatus("conectando")
     setTimeout(() => setWhatsappStatus("conectado"), 2200)
   }
   const handleRefreshQR = () => {
-    if (whatsappStatus === "desconectado") handleConfigureWhatsApp()
+    if (whatsappStatus !== "conectando") handleConfigureWhatsApp()
   }
-  const handleConfirmImport = () => {}
-  const handleSaveRate = (rate: SendingRate) => setSendingRate(rate)
-  const handleEditVariations = () => {}
-  const handleViewHistory = () => {}
 
-  // Fila derivada
-  const current = mockLeads.find((l) => l.status === "proximo") ?? mockLeads[1]
-  const upNext = mockLeads.filter((l) => l.status === "aguardando")
-  const lastSent = mockLeads.filter((l) => l.status === "enviado").at(-1) ?? null
+  // ── Botão principal (um por estado) ─────────────────────────────────────────
+  const handlePrimary = () => {
+    switch (sim) {
+      case "sem-campanha":
+      case "finalizada":
+        setModal("nova")
+        break
+      case "pronta":
+        setModal("iniciar")
+        break
+      case "simulando":
+        setModal("pausar")
+        break
+      case "pausada":
+        setModal("retomar")
+        break
+    }
+  }
+
+  // ── Ações secundárias (menu "...") ──────────────────────────────────────────
+  const secondaryActions: MenuAction[] = (() => {
+    const actions: MenuAction[] = []
+    if (sim === "simulando" || sim === "pausada") {
+      actions.push({ label: "Cancelar campanha", tone: "danger", onSelect: () => setModal("cancelar") })
+    }
+    if (sim === "finalizada") {
+      actions.push({ label: "Resetar teste autorizado", onSelect: () => setModal("resetar") })
+    }
+    actions.push({ label: "Configurar WhatsApp", onSelect: handleConfigureWhatsApp })
+    return actions
+  })()
+
+  const handleConfirmImport = (fileName: string) => {
+    setImportSummary({ ...mockImportSummary, arquivo: fileName })
+  }
+
+  // ── Conteúdo dos modais ─────────────────────────────────────────────────────
+  const modalProps = (() => {
+    switch (modal) {
+      case "iniciar":
+        return {
+          title: "Iniciar simulação?",
+          description: "A campanha será processada em modo seguro. Nenhum WhatsApp real será enviado.",
+          confirmLabel: "Iniciar simulação",
+          tone: "primary" as const,
+          onConfirm: () => setSim("simulando"),
+        }
+      case "pausar":
+        return {
+          title: "Pausar simulação?",
+          description: "A fila será pausada. Você pode retomar de onde parou a qualquer momento.",
+          confirmLabel: "Pausar",
+          tone: "primary" as const,
+          onConfirm: () => setSim("pausada"),
+        }
+      case "retomar":
+        return {
+          title: "Retomar simulação?",
+          description: "A fila continuará a ser processada em modo seguro.",
+          confirmLabel: "Retomar",
+          tone: "primary" as const,
+          onConfirm: () => setSim("simulando"),
+        }
+      case "cancelar":
+        return {
+          title: "Cancelar campanha?",
+          description: "A simulação atual será encerrada e a fila zerada. Esta ação não pode ser desfeita.",
+          confirmLabel: "Cancelar campanha",
+          tone: "danger" as const,
+          onConfirm: () => setSim("finalizada"),
+        }
+      case "nova":
+        return {
+          title: "Nova campanha?",
+          description: "Os dados da campanha anterior serão limpos para você começar do zero.",
+          confirmLabel: "Nova campanha",
+          tone: "primary" as const,
+          onConfirm: () => {
+            setImportSummary(null)
+            setSim("sem-campanha")
+          },
+        }
+      case "resetar":
+        return {
+          title: "Resetar teste autorizado?",
+          description: "Os contadores da simulação serão reiniciados. Nenhum dado real é afetado.",
+          confirmLabel: "Resetar teste",
+          tone: "primary" as const,
+          onConfirm: () => setSim("pronta"),
+        }
+      default:
+        return null
+    }
+  })()
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
-      {/* Header compacto */}
-      <header className="shrink-0 border-b border-border bg-background/95 px-3 backdrop-blur sm:px-5">
-        <div className="mx-auto flex h-12 max-w-screen-2xl items-center gap-2 sm:gap-3">
+      {/* ── TOPO LIMPO ────────────────────────────────────────────────────────── */}
+      <header className="shrink-0 px-3 sm:px-5">
+        <div className="mx-auto flex h-14 max-w-screen-2xl items-center gap-3">
           {/* Logo */}
           <div className="flex shrink-0 items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-primary">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
             </div>
-            <div className="leading-none">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-foreground">
-                Central Play Plus
-              </p>
+            <div className="leading-tight">
+              <p className="text-xs font-bold text-foreground">Central Play Plus</p>
               <p className="text-[10px] text-muted-foreground">Prospecção</p>
             </div>
           </div>
 
           {/* Status WhatsApp */}
           <span
-            className={`ml-1 hidden items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium sm:inline-flex ${
+            className={`ml-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
               whatsappStatus === "conectado"
-                ? "bg-[var(--success)]/15 text-[var(--success)]"
+                ? "bg-[var(--success)]/12 text-[var(--success)]"
                 : whatsappStatus === "conectando"
-                ? "bg-primary/15 text-primary"
-                : "bg-destructive/15 text-destructive"
+                ? "bg-primary/12 text-primary"
+                : "bg-destructive/12 text-destructive"
             }`}
           >
             <span
@@ -87,127 +194,107 @@ export default function ProspectingPage() {
                   : "bg-destructive"
               }`}
             />
-            {whatsappStatus === "conectado"
-              ? "WhatsApp conectado"
-              : whatsappStatus === "conectando"
-              ? "Conectando..."
-              : "WhatsApp desconectado"}
+            <span className="hidden sm:inline">
+              {whatsappStatus === "conectado"
+                ? "WhatsApp conectado"
+                : whatsappStatus === "conectando"
+                ? "Conectando..."
+                : "WhatsApp desconectado"}
+            </span>
           </span>
 
-          {/* Ações */}
-          <div className="ml-auto flex items-center gap-1.5">
+          {/* Botão principal único + menu */}
+          <div className="ml-auto flex items-center gap-2">
             <button
-              onClick={handleConfigureWhatsApp}
-              className="hidden rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
-            >
-              Configurar WhatsApp
-            </button>
-            {(isRunning || isPaused) && (
-              <button
-                onClick={handlePause}
-                disabled={isPaused}
-                className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-40"
-              >
-                Pausar
-              </button>
-            )}
-            <button
-              onClick={handleToggleCampaign}
-              className={`rounded-md px-3.5 py-1.5 text-[11px] font-semibold transition-colors ${
+              onClick={handlePrimary}
+              className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${
                 isRunning
                   ? "bg-secondary text-foreground hover:bg-muted"
-                  : "bg-primary text-primary-foreground shadow-[0_0_0_1px_var(--primary)] shadow-primary/30 hover:bg-primary/90"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90"
               }`}
             >
-              {isRunning ? (
-                <span className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
-                  Em andamento
-                </span>
-              ) : isPaused ? (
-                "Retomar"
-              ) : (
-                "Iniciar campanha"
-              )}
+              {PRIMARY_LABEL[sim]}
             </button>
+            <ActionMenu actions={secondaryActions} />
           </div>
         </div>
       </header>
 
-      {/* Conteúdo — cabe na viewport */}
-      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4">
+      {/* ── CONTEÚDO ───────────────────────────────────────────────────────────── */}
+      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-y-auto px-3 pb-3 sm:gap-4 sm:overflow-hidden sm:px-5 sm:pb-5">
         <MetricsBar stats={mockCampaignStats} />
 
-        {/* DESKTOP: grid de blocos */}
-        <div className="hidden flex-1 grid-rows-[minmax(0,0.78fr)_minmax(0,1fr)] gap-3 overflow-hidden lg:grid">
-          <div className="grid grid-cols-3 gap-3 overflow-hidden">
-            <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
-            <ImportMiniCard onConfirmImport={handleConfirmImport} />
-            <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
+        {/* DESKTOP */}
+        <div className="hidden flex-1 grid-rows-[minmax(0,0.82fr)_minmax(0,1fr)] gap-4 overflow-hidden lg:grid">
+          <div className="grid grid-cols-3 gap-4 overflow-hidden">
+            <WhatsAppCard
+              status={whatsappStatus}
+              onRefreshQR={handleRefreshQR}
+              onConfigure={handleConfigureWhatsApp}
+            />
+            <ImportCard summary={importSummary} onConfirmImport={handleConfirmImport} />
+            <ControlCard
+              status={sim}
+              rate={rate}
+              rateChanged={rateChanged}
+              nextLead={current}
+              timer={mockCampaignStats.proximoEnvio}
+              simuladosCount={simuladosCount}
+              onSaveRate={() => {}}
+            />
           </div>
-          <div className="grid grid-cols-2 gap-3 overflow-hidden">
-            <MessagePreviewCard templates={mockTemplates} onEdit={handleEditVariations} />
+          <div className="grid grid-cols-2 gap-4 overflow-hidden">
+            <MessagePreviewCard templates={mockTemplates} onEdit={() => {}} />
             <QueueMiniCard
               current={current}
               upNext={upNext}
               lastSent={lastSent}
               isRunning={isRunning}
-              onViewHistory={handleViewHistory}
+              onViewHistory={() => {}}
             />
           </div>
         </div>
 
-        {/* MOBILE: abas */}
-        <div className="flex flex-1 flex-col overflow-hidden lg:hidden">
-          <div className="flex-1 overflow-hidden">
-            {mobileTab === "whatsapp" && (
-              <WhatsAppMiniCard status={whatsappStatus} onRefreshQR={handleRefreshQR} />
-            )}
-            {mobileTab === "importar" && (
-              <ImportMiniCard onConfirmImport={handleConfirmImport} />
-            )}
-            {mobileTab === "ritmo" && (
-              <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
-            )}
-            {mobileTab === "mensagem" && (
-              <MessagePreviewCard templates={mockTemplates} onEdit={handleEditVariations} />
-            )}
-            {mobileTab === "fila" && (
-              <QueueMiniCard
-                current={current}
-                upNext={upNext}
-                lastSent={lastSent}
-                isRunning={isRunning}
-                onViewHistory={handleViewHistory}
-              />
-            )}
-          </div>
-
-          {/* Abas inferiores */}
-          <nav className="mt-3 grid shrink-0 grid-cols-5 gap-1 rounded-lg border border-border bg-card p-1">
-            {[
-              { id: "whatsapp" as const, label: "WhatsApp" },
-              { id: "importar" as const, label: "Importar" },
-              { id: "ritmo" as const, label: "Ritmo" },
-              { id: "mensagem" as const, label: "Msg" },
-              { id: "fila" as const, label: "Fila" },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setMobileTab(tab.id)}
-                aria-pressed={mobileTab === tab.id}
-                className={`rounded-md py-2 text-[10px] font-medium transition-colors ${
-                  mobileTab === tab.id
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
+        {/* MOBILE — ordem do prompt */}
+        <div className="flex flex-col gap-3 lg:hidden">
+          <ControlCard
+            status={sim}
+            rate={rate}
+            rateChanged={rateChanged}
+            nextLead={current}
+            timer={mockCampaignStats.proximoEnvio}
+            simuladosCount={simuladosCount}
+            onSaveRate={() => {}}
+          />
+          <WhatsAppCard
+            status={whatsappStatus}
+            onRefreshQR={handleRefreshQR}
+            onConfigure={handleConfigureWhatsApp}
+          />
+          <ImportCard summary={importSummary} onConfirmImport={handleConfirmImport} />
+          <MessagePreviewCard templates={mockTemplates} onEdit={() => {}} />
+          <QueueMiniCard
+            current={current}
+            upNext={upNext}
+            lastSent={lastSent}
+            isRunning={isRunning}
+            onViewHistory={() => {}}
+          />
         </div>
       </main>
+
+      {/* ── MODAIS ─────────────────────────────────────────────────────────────── */}
+      {modalProps && (
+        <ConfirmModal
+          open={modal !== null}
+          title={modalProps.title}
+          description={modalProps.description}
+          confirmLabel={modalProps.confirmLabel}
+          tone={modalProps.tone}
+          onConfirm={modalProps.onConfirm}
+          onClose={() => setModal(null)}
+        />
+      )}
     </div>
   )
 }
