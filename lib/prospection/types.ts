@@ -49,7 +49,16 @@ export interface ProspectionLead {
   scheduled_at?: string | null
   sent_at?: string | null
   responded_at?: string | null
+  responded_positive_at?: string | null
   last_response_text?: string | null
+  last_inbound_message_id?: string | null
+  last_inbound_at?: string | null
+  welcome_triggered_at?: string | null
+  welcome_status?: string | null
+  install_sent_at?: string | null
+  install_device?: string | null
+  install_status?: string | null
+  active_flow_type?: string | null
   send_attempts: number
   error_message?: string | null
   metadata: Record<string, unknown>

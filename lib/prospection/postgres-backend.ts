@@ -1,4 +1,5 @@
 import { Pool } from 'pg'
+import crypto from 'crypto'
 import { getProspectionConfig } from './config'
 import { renderTemplate, defaultTemplates } from './templates'
 import { normalizePhone } from './phone'
@@ -64,7 +65,16 @@ function toLead(row: Record<string, unknown>): ProspectionLead {
     scheduled_at: row.scheduled_at ? String(row.scheduled_at) : null,
     sent_at: row.sent_at ? String(row.sent_at) : null,
     responded_at: row.responded_at ? String(row.responded_at) : null,
+    responded_positive_at: row.responded_positive_at ? String(row.responded_positive_at) : null,
     last_response_text: row.last_response_text ? String(row.last_response_text) : null,
+    last_inbound_message_id: row.last_inbound_message_id ? String(row.last_inbound_message_id) : null,
+    last_inbound_at: row.last_inbound_at ? String(row.last_inbound_at) : null,
+    welcome_triggered_at: row.welcome_triggered_at ? String(row.welcome_triggered_at) : null,
+    welcome_status: row.welcome_status ? String(row.welcome_status) : null,
+    install_sent_at: row.install_sent_at ? String(row.install_sent_at) : null,
+    install_device: row.install_device ? String(row.install_device) : null,
+    install_status: row.install_status ? String(row.install_status) : null,
+    active_flow_type: row.active_flow_type ? String(row.active_flow_type) : null,
     send_attempts: Number(row.send_attempts || 0),
     error_message: row.error_message ? String(row.error_message) : null,
     metadata: (row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {}) as Record<string, unknown>,
@@ -178,6 +188,37 @@ function randomDelaySeconds(campaign: ProspectionCampaign) {
   return Math.floor(min + Math.random() * (max - min + 1))
 }
 
+function textHash(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 24)
+}
+
+function inboundBucket(date = new Date()) {
+  return Math.floor(date.getTime() / (2 * 60 * 1000))
+}
+
+function inboundKey(input: { instanceName: string; messageId?: string | null; phone: string; text: string }) {
+  if (input.messageId) return `prospection:inbound:${input.instanceName}:${input.messageId}`
+  return `prospection:inbound:${input.instanceName}:${input.phone}:${textHash(input.text.trim().toLowerCase())}:${inboundBucket()}`
+}
+
+function flowWindowKey(prefix: 'welcome' | 'install', phone: string, device?: string) {
+  const dayBucket = new Date().toISOString().slice(0, 13)
+  return prefix === 'install'
+    ? `prospection:install:${phone}:${textHash(String(device || '').toLowerCase())}:${dayBucket}`
+    : `prospection:welcome:${phone}:${dayBucket}`
+}
+
+function isRecent(value: unknown, hours: number) {
+  if (!value) return false
+  const date = new Date(String(value))
+  if (!Number.isFinite(date.getTime())) return false
+  return Date.now() - date.getTime() < hours * 60 * 60 * 1000
+}
+
+function metadataValue(value: Record<string, unknown>, key: string) {
+  return value && typeof value[key] === 'string' ? String(value[key]) : ''
+}
+
 function eventForStatus(status: ProspectionCampaign['status']) {
   if (status === 'running') return getProspectionConfig().dryRun || !getProspectionConfig().enabled ? 'CAMPAIGN_STARTED_DRY_RUN' : 'CAMPAIGN_STARTED'
   if (status === 'paused') return 'CAMPAIGN_PAUSED'
@@ -251,6 +292,20 @@ async function ensureReady() {
       `alter table prospection_leads add constraint prospection_leads_status_check
        check (status in ('imported','queued','scheduled','sending','sent','dry_run_sent','responded','responded_positive','opt_out','invalid_phone','duplicate','error'))`,
     )
+    await client.query(`alter table prospection_leads add column if not exists responded_positive_at timestamptz`)
+    await client.query(`alter table prospection_leads add column if not exists welcome_triggered_at timestamptz`)
+    await client.query(`alter table prospection_leads add column if not exists welcome_status text`)
+    await client.query(`alter table prospection_leads add column if not exists active_flow_type text`)
+    await client.query(`alter table prospection_leads add column if not exists last_inbound_message_id text`)
+    await client.query(`alter table prospection_leads add column if not exists last_inbound_at timestamptz`)
+    await client.query(`alter table prospection_leads add column if not exists install_sent_at timestamptz`)
+    await client.query(`alter table prospection_leads add column if not exists install_device text`)
+    await client.query(`alter table prospection_leads add column if not exists install_status text`)
+    await client.query(`alter table prospection_messages add column if not exists idempotency_key text`)
+    await client.query(`alter table prospection_events add column if not exists idempotency_key text`)
+    await client.query(`create unique index if not exists prospection_messages_idempotency_key_idx on prospection_messages(idempotency_key) where idempotency_key is not null`)
+    await client.query(`create unique index if not exists prospection_events_idempotency_key_idx on prospection_events(idempotency_key) where idempotency_key is not null`)
+    await client.query(`create index if not exists prospection_events_phone_window_idx on prospection_events((metadata->>'targetPhone'), event_type, created_at desc)`)
     const { rows } = await client.query<{ count: string }>('select count(*)::text as count from prospection_templates')
     if (Number(rows[0]?.count || 0) === 0) {
       await client.query(
@@ -684,35 +739,275 @@ export async function failSend(input: { campaignId: string; leadId: string; erro
   return toLead(camel(rows[0]))
 }
 
-export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string; messageId?: string | null }) {
+export async function recordProspectionEvent(input: { eventType: string; message: string; phone?: string | null; instanceName?: string | null; messageId?: string | null; metadata?: Record<string, unknown>; idempotencyKey?: string | null }) {
+  await ensureReady()
+  const phone = input.phone ? normalizePhone(input.phone) : ''
+  await query(
+    `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata,idempotency_key)
+     values (null,null,$1,$2,$3::jsonb,$4)
+     on conflict (idempotency_key) where idempotency_key is not null do nothing`,
+    [
+      input.eventType,
+      input.message,
+      JSON.stringify({
+        ...(input.metadata || {}),
+        targetPhone: phone || null,
+        instanceName: input.instanceName || null,
+        messageId: input.messageId || null,
+      }),
+      input.idempotencyKey || null,
+    ],
+  )
+}
+
+export async function recordFlowResult(input: { flow: 'welcome' | 'install'; phone: string; leadId?: string | null; campaignId?: string | null; device?: string | null; ok: boolean; code: string; metadata?: Record<string, unknown> }) {
+  await ensureReady()
+  const phone = normalizePhone(input.phone)
+  if (!phone) return
+  const eventType = input.flow === 'welcome'
+    ? input.ok ? 'WELCOME_SENT' : 'WELCOME_FAILED'
+    : input.ok ? 'INSTALL_SENT' : 'INSTALL_FAILED'
+  await withTx(async (tx) => {
+    const leadRows = input.leadId
+      ? await tx.query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1 for update`, [input.leadId])
+      : await tx.query<ProspectionLead>(`select * from prospection_leads where phone_e164=$1 and status not in ('duplicate','invalid_phone') order by created_at desc limit 1 for update`, [phone])
+    const lead = leadRows[0]
+    if (lead) {
+      if (input.flow === 'welcome') {
+        await tx.query(
+          `update prospection_leads
+              set welcome_status=$2,
+                  active_flow_type=case when $2='sent' then 'welcome' else active_flow_type end,
+                  updated_at=now()
+            where id=$1`,
+          [lead.id, input.ok ? 'sent' : 'error'],
+        )
+      } else {
+        await tx.query(
+          `update prospection_leads
+              set install_status=$2,
+                  active_flow_type='install',
+                  updated_at=now()
+            where id=$1`,
+          [lead.id, input.ok ? 'sent' : 'error'],
+        )
+      }
+    }
+    await tx.query(
+      `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+       values ($1,$2,$3,$4,$5::jsonb)`,
+      [
+        input.campaignId || lead?.campaign_id || null,
+        input.leadId || lead?.id || null,
+        eventType,
+        input.ok ? 'Flow de prospeccao enviado.' : 'Falha ao chamar flow de prospeccao.',
+        JSON.stringify({ ...(input.metadata || {}), targetPhone: phone, flow: input.flow, device: input.device || null, code: input.code }),
+      ],
+    )
+  })
+}
+
+export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string; messageId?: string | null; instanceName?: string | null }) {
   await ensureReady()
   const phone = normalizePhone(input.phone)
   if (!phone) throw new Error('Telefone inbound invalido.')
+  const instanceName = String(input.instanceName || getProspectionConfig().evolutionInstance || 'unknown')
+  const key = inboundKey({ instanceName, messageId: input.messageId || null, phone, text: input.text })
+  const normalizedTextHash = textHash(input.text.trim().toLowerCase())
   return withTx(async (tx) => {
-    if (input.messageId) {
-      const duplicateRows = await tx.query<{ id: string }>(`select id from prospection_messages where direction='inbound' and evolution_message_id=$1 limit 1`, [input.messageId])
-      if (duplicateRows[0]) {
-        await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values (null,null,'inbound_duplicate','Mensagem inbound duplicada ignorada.',$1::jsonb)`, [JSON.stringify({ phone, messageId: input.messageId })])
-        return { lead: null, duplicate: true }
-      }
+    const receivedRows = await tx.query<{ id: string }>(
+      `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata,idempotency_key)
+       values (null,null,'INBOUND_RECEIVED','Mensagem inbound recebida.',$1::jsonb,$2)
+       on conflict (idempotency_key) where idempotency_key is not null do nothing
+       returning id`,
+      [JSON.stringify({ targetPhone: phone, instanceName, messageId: input.messageId || null, textHash: normalizedTextHash, classification: input.classification }), key],
+    )
+    if (!receivedRows[0]) {
+      await tx.query(
+        `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+         values (null,null,'INBOUND_DUPLICATE_IGNORED','Mensagem inbound duplicada ignorada.',$1::jsonb)`,
+        [JSON.stringify({ targetPhone: phone, instanceName, messageId: input.messageId || null, idempotencyKey: key })],
+      )
+      return { lead: null, duplicate: true, action: { type: 'none', code: 'INBOUND_DUPLICATE_IGNORED' } }
     }
+
+    const lockRows = await tx.query<{ locked: boolean }>(`select pg_try_advisory_xact_lock(hashtext($1)) as locked`, [`prospection:phone-lock:${phone}`])
+    if (!lockRows[0]?.locked) {
+      await tx.query(
+        `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+         values (null,null,'PROSPECTION_SKIPPED_LOCKED','Inbound ignorado porque o telefone ja esta em processamento.',$1::jsonb)`,
+        [JSON.stringify({ targetPhone: phone, instanceName, messageId: input.messageId || null })],
+      )
+      return { lead: null, locked: true, action: { type: 'none', code: 'PROSPECTION_SKIPPED_LOCKED' } }
+    }
+    await tx.query(
+      `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+       values (null,null,'INBOUND_LOCK_ACQUIRED','Lock por telefone adquirido.',$1::jsonb)`,
+      [JSON.stringify({ targetPhone: phone, instanceName, lockKey: `prospection:phone-lock:${phone}` })],
+    )
+
     const leadRows = await tx.query<ProspectionLead>(
-      `select * from prospection_leads where phone_e164=$1 and status not in ('duplicate','invalid_phone') order by created_at desc limit 1`,
+      `select * from prospection_leads where phone_e164=$1 and status not in ('duplicate','invalid_phone') order by created_at desc limit 1 for update`,
       [phone],
     )
     const lead = leadRows[0]
     const now = new Date().toISOString()
     if (lead) {
       const nextStatus = input.classification === 'positive' ? 'responded_positive' : input.classification === 'opt_out' ? 'opt_out' : 'responded'
-      await tx.query(`update prospection_leads set last_response_text=$2, responded_at=$3, updated_at=$3, status=$4 where id=$1`, [lead.id, input.text, now, nextStatus])
+      await tx.query(
+        `update prospection_leads
+            set last_response_text=$2,
+                responded_at=$3,
+                responded_positive_at=case when $5 then coalesce(responded_positive_at,$3) else responded_positive_at end,
+                last_inbound_message_id=$6,
+                last_inbound_at=$3,
+                updated_at=$3,
+                status=$4
+          where id=$1`,
+        [lead.id, input.text, now, nextStatus, input.classification === 'positive', input.messageId || null],
+      )
     }
-    await tx.query(`insert into prospection_messages (campaign_id,lead_id,direction,type,body,status,evolution_message_id,error_message) values ($1,$2,'inbound','manual',$3,$4,$5,null)`, [lead?.campaign_id || null, lead?.id || null, input.text, input.classification, input.messageId || null])
+    await tx.query(
+      `insert into prospection_messages (campaign_id,lead_id,direction,type,body,status,evolution_message_id,error_message,idempotency_key)
+       values ($1,$2,'inbound','manual',$3,$4,$5,null,$6)
+       on conflict (idempotency_key) where idempotency_key is not null do nothing`,
+      [lead?.campaign_id || null, lead?.id || null, input.text, input.classification, input.messageId || null, key],
+    )
     if (input.classification === 'opt_out') {
       await tx.query(`insert into prospection_optouts (phone_e164, reason) values ($1,$2) on conflict (phone_e164) do update set reason=excluded.reason`, [phone, input.text])
     }
-    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,$3,'Resposta recebida.',$4::jsonb)`, [lead?.campaign_id || null, lead?.id || null, `inbound_${input.classification}`, JSON.stringify({ device: input.device || null })])
+    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,$3,'Resposta recebida.',$4::jsonb)`, [lead?.campaign_id || null, lead?.id || null, `INBOUND_${String(input.classification).toUpperCase()}`, JSON.stringify({ targetPhone: phone, device: input.device || null, messageId: input.messageId || null })])
+
+    const repeatRows = await tx.query<{ count: string }>(
+      `select count(*)::text as count
+         from prospection_events
+        where event_type='INBOUND_RECEIVED'
+          and metadata->>'targetPhone'=$1
+          and metadata->>'textHash'=$2
+          and created_at >= now() - interval '2 minutes'`,
+      [phone, normalizedTextHash],
+    )
+    if (Number(repeatRows[0]?.count || 0) > 3) {
+      if (lead?.campaign_id) {
+        await tx.query(`update prospection_campaigns set status='paused', next_send_after=null, updated_at=now() where id=$1 and status='running'`, [lead.campaign_id])
+      }
+      await tx.query(
+        `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+         values ($1,$2,'PROSPECTION_CIRCUIT_BREAKER_TRIGGERED','Inbound repetido em janela curta; campanha pausada preventivamente.',$3::jsonb)`,
+        [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, reason: 'three_equal_inbounds_in_2_minutes', textHash: normalizedTextHash })],
+      )
+      await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,'INBOUND_LOCK_RELEASED','Lock por telefone liberado ao finalizar transacao.',$3::jsonb)`, [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone })])
+      return { lead: lead ? toLead(camel(lead)) : null, action: { type: 'none', code: 'PROSPECTION_CIRCUIT_BREAKER_TRIGGERED' } }
+    }
+
+    let action: Record<string, unknown> = { type: 'none', code: 'NO_FLOW_TRIGGERED' }
+    if (input.classification === 'positive') {
+      const recentWelcomeRows = await tx.query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_events
+          where event_type in ('WELCOME_TRIGGERED','WELCOME_SENT')
+            and metadata->>'targetPhone'=$1
+            and created_at >= now() - interval '24 hours'`,
+        [phone],
+      )
+      const recentWelcome = isRecent(lead?.welcome_triggered_at, 24) || Number(recentWelcomeRows[0]?.count || 0) > 0
+      if (recentWelcome) {
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+           values ($1,$2,'PROSPECTION_WELCOME_SKIPPED_ALREADY_SENT','Welcome ja reservado/enviado nas ultimas 24h.',$3::jsonb)`,
+          [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, welcomeTriggeredAt: lead?.welcome_triggered_at || null })],
+        )
+        action = { type: 'none', code: 'PROSPECTION_WELCOME_SKIPPED_ALREADY_SENT' }
+      } else {
+        const attemptsRows = await tx.query<{ count: string }>(
+          `select count(*)::text as count
+             from prospection_events
+            where event_type='WELCOME_TRIGGERED'
+              and metadata->>'targetPhone'=$1
+              and created_at >= now() - interval '10 minutes'`,
+          [phone],
+        )
+        if (Number(attemptsRows[0]?.count || 0) > 1) {
+          if (lead?.campaign_id) {
+            await tx.query(`update prospection_campaigns set status='paused', next_send_after=null, updated_at=now() where id=$1 and status='running'`, [lead.campaign_id])
+          }
+          await tx.query(
+            `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+             values ($1,$2,'PROSPECTION_CIRCUIT_BREAKER_TRIGGERED','Mais de uma tentativa de welcome em 10 minutos.',$3::jsonb)`,
+            [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, reason: 'welcome_attempts_10m', attempts: Number(attemptsRows[0]?.count || 0) })],
+          )
+          action = { type: 'none', code: 'PROSPECTION_CIRCUIT_BREAKER_TRIGGERED' }
+        } else {
+          if (lead) {
+            await tx.query(
+              `update prospection_leads
+                  set welcome_triggered_at=$2,
+                      welcome_status='pending',
+                      active_flow_type='welcome',
+                      updated_at=$2
+                where id=$1`,
+              [lead.id, now],
+            )
+          }
+          const welcomeKey = `prospection:welcome:${phone}`
+          await tx.query(
+            `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata,idempotency_key)
+             values ($1,$2,'WELCOME_TRIGGERED','Welcome reservado para envio.',$3::jsonb,$4)
+             on conflict (idempotency_key) where idempotency_key is not null do nothing`,
+            [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, instanceName, idempotencyKey: welcomeKey }), flowWindowKey('welcome', phone)],
+          )
+          action = { type: 'welcome', code: 'WELCOME_TRIGGERED', phone, name: lead?.name || input.leadName || '', idempotencyKey: welcomeKey, leadId: lead?.id || null, campaignId: lead?.campaign_id || null, instanceName }
+        }
+      }
+    } else if (input.classification === 'device' && input.device) {
+      const recentInstallRows = await tx.query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_events
+          where event_type in ('INSTALL_TRIGGERED','INSTALL_SENT')
+            and metadata->>'targetPhone'=$1
+            and metadata->>'device'=$2
+            and created_at >= now() - interval '24 hours'`,
+        [phone, input.device],
+      )
+      const recentInstall = (
+        isRecent(lead?.install_sent_at, 24) &&
+        String(lead?.install_device || '') === input.device
+      ) || Number(recentInstallRows[0]?.count || 0) > 0
+      if (recentInstall) {
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+           values ($1,$2,'INSTALL_SKIPPED_ALREADY_SENT','Install ja reservado/enviado para este aparelho nas ultimas 24h.',$3::jsonb)`,
+          [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, device: input.device })],
+        )
+        action = { type: 'none', code: 'INSTALL_SKIPPED_ALREADY_SENT', device: input.device }
+      } else {
+        const installKey = `prospection:install:${phone}:${String(input.device).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+        if (lead) {
+          await tx.query(
+            `update prospection_leads
+                set install_sent_at=$2,
+                    install_device=$3,
+                    install_status='pending',
+                    active_flow_type='install',
+                    welcome_status=case when welcome_status='pending' then 'cancelled' else welcome_status end,
+                    updated_at=$2
+              where id=$1`,
+            [lead.id, now, input.device],
+          )
+        }
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata,idempotency_key)
+           values ($1,$2,'INSTALL_TRIGGERED','Install reservado para envio.',$3::jsonb,$4)
+           on conflict (idempotency_key) where idempotency_key is not null do nothing`,
+          [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, instanceName, device: input.device, idempotencyKey: installKey, cancelledWelcome: true }), flowWindowKey('install', phone, input.device)],
+        )
+        action = { type: 'install', code: 'INSTALL_TRIGGERED', phone, name: lead?.name || input.leadName || '', device: input.device, idempotencyKey: installKey, leadId: lead?.id || null, campaignId: lead?.campaign_id || null, instanceName }
+      }
+    }
+
+    await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,'INBOUND_LOCK_RELEASED','Lock por telefone liberado ao finalizar transacao.',$3::jsonb)`, [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone })])
     const rows = lead ? await tx.query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1`, [lead.id]) : []
-    return { lead: rows[0] ? toLead(camel(rows[0])) : null }
+    return { lead: rows[0] ? toLead(camel(rows[0])) : null, action }
   })
 }
 

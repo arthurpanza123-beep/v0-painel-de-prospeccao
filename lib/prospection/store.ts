@@ -582,7 +582,43 @@ export async function failSend(input: { campaignId: string; leadId: string; erro
   })
 }
 
-export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string; messageId?: string | null }) {
+export async function recordProspectionEvent(input: { eventType: string; message: string; phone?: string | null; instanceName?: string | null; messageId?: string | null; metadata?: Record<string, unknown>; idempotencyKey?: string | null }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.recordProspectionEvent(input)
+  return withLock(async (db) => {
+    event(db, {
+      campaign_id: null,
+      lead_id: null,
+      event_type: input.eventType,
+      message: input.message,
+      metadata: {
+        ...(input.metadata || {}),
+        targetPhone: input.phone ? normalizePhone(input.phone) : null,
+        instanceName: input.instanceName || null,
+        messageId: input.messageId || null,
+        idempotencyKey: input.idempotencyKey || null,
+      },
+    })
+    return { ok: true }
+  })
+}
+
+export async function recordFlowResult(input: { flow: 'welcome' | 'install'; phone: string; leadId?: string | null; campaignId?: string | null; device?: string | null; ok: boolean; code: string; metadata?: Record<string, unknown> }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.recordFlowResult(input)
+  return withLock(async (db) => {
+    const phone = normalizePhone(input.phone)
+    const lead = db.leads.find((item) => item.id === input.leadId) || db.leads.find((item) => item.phone_e164 === phone)
+    event(db, {
+      campaign_id: input.campaignId || lead?.campaign_id || null,
+      lead_id: input.leadId || lead?.id || null,
+      event_type: input.flow === 'welcome' ? input.ok ? 'WELCOME_SENT' : 'WELCOME_FAILED' : input.ok ? 'INSTALL_SENT' : 'INSTALL_FAILED',
+      message: input.ok ? 'Flow de prospeccao enviado.' : 'Falha ao chamar flow de prospeccao.',
+      metadata: { ...(input.metadata || {}), targetPhone: phone, flow: input.flow, device: input.device || null, code: input.code },
+    })
+    return { ok: true }
+  })
+}
+
+export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string; messageId?: string | null; instanceName?: string | null }) {
   if (postgresBackend.isEnabled()) return postgresBackend.recordInbound(input)
   const phone = normalizePhone(input.phone)
   if (!phone) throw new Error('Telefone inbound invalido.')

@@ -16,16 +16,20 @@ async function callPanel2(path: string, body: Record<string, unknown>) {
   }
 }
 
-export async function triggerWelcome(input: { phone: string; name?: string | null }) {
+export async function triggerWelcome(input: { phone: string; name?: string | null; idempotencyKey: string }) {
   const config = getProspectionConfig()
   const phone = normalizePhone(input.phone)
   if (!phone) return { ok: false, code: 'INVALID_PHONE', phone: '' }
   try {
     const result = await callPanel2('/api/flows/welcome', {
       phone,
-      client: { name: input.name || '' },
+      customerPhone: phone,
+      name: input.name || '',
+      client: { name: input.name || '', phone },
+      source: 'prospection',
+      idempotencyKey: input.idempotencyKey,
+      idempotency_key: input.idempotencyKey,
       dryRun: config.dryRun || !config.enabled,
-      force: false,
     })
     return { ...result, code: 'WELCOME_TRIGGERED', phone: maskPhone(phone) }
   } catch (error) {
@@ -33,16 +37,21 @@ export async function triggerWelcome(input: { phone: string; name?: string | nul
   }
 }
 
-export async function triggerInstall(input: { phone: string; name?: string | null; device: string }) {
+export async function triggerInstall(input: { phone: string; name?: string | null; device: string; idempotencyKey: string }) {
   const config = getProspectionConfig()
   const phone = normalizePhone(input.phone)
   if (!phone) return { ok: false, code: 'INVALID_PHONE', phone: '' }
   try {
     const result = await callPanel2('/api/flows/install', {
       phone,
-      client: { name: input.name || '' },
+      customerPhone: phone,
+      name: input.name || '',
+      client: { name: input.name || '', phone },
       app: process.env.PROSPECTION_DEFAULT_INSTALL_APP || 'XCloud',
       device: input.device,
+      source: 'prospection',
+      idempotencyKey: input.idempotencyKey,
+      idempotency_key: input.idempotencyKey,
       dryRun: config.dryRun || !config.enabled,
     })
     return { ...result, code: 'INSTALL_TRIGGERED', phone: maskPhone(phone) }

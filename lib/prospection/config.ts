@@ -13,6 +13,7 @@ export interface ProspectionConfig {
   evolutionApiUrl: string
   evolutionApiKey: string
   evolutionInstance: string
+  connectedInstancePhone: string
   prospectionPublicUrl: string
   evolutionTimeoutMs: number
   realAllowedPhones: string[]
@@ -38,6 +39,10 @@ function listEnv(value: string | undefined) {
     .filter(Boolean)
 }
 
+function uniqueList(...values: string[][]) {
+  return Array.from(new Set(values.flat()))
+}
+
 export function getProspectionConfig(): ProspectionConfig {
   return {
     apiBaseUrl: String(process.env.PROSPECTION_API_BASE_URL || 'http://127.0.0.1:3003').replace(/\/+$/, ''),
@@ -54,9 +59,13 @@ export function getProspectionConfig(): ProspectionConfig {
     evolutionApiUrl: String(process.env.EVOLUTION_API_URL || '').replace(/\/+$/, ''),
     evolutionApiKey: String(process.env.EVOLUTION_API_KEY || ''),
     evolutionInstance: String(process.env.EVOLUTION_PROSPECTION_INSTANCE || 'centralplay-leads'),
+    connectedInstancePhone: String(process.env.PROSPECTION_CONNECTED_INSTANCE_PHONE || '').replace(/\D/g, ''),
     prospectionPublicUrl: String(process.env.PROSPECTION_PUBLIC_URL || 'https://prospeccao.centralplayplus.com.br').replace(/\/+$/, ''),
     evolutionTimeoutMs: intEnv(process.env.EVOLUTION_TIMEOUT_MS, 30000),
-    realAllowedPhones: listEnv(process.env.PROSPECTION_REAL_ALLOWED_PHONES),
+    realAllowedPhones: uniqueList(
+      listEnv(process.env.PROSPECTION_REAL_ALLOWED_RECIPIENTS),
+      listEnv(process.env.PROSPECTION_REAL_ALLOWED_PHONES),
+    ),
     storageFile: String(process.env.PROSPECTION_STORAGE_FILE || 'storage/prospection-db.json'),
     supabaseUrl: String(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
     supabaseServiceRoleKey: String(process.env.SUPABASE_SERVICE_ROLE_KEY || ''),
