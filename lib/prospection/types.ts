@@ -9,6 +9,7 @@ export type LeadStatus =
   | 'dry_run_sent'
   | 'responded'
   | 'responded_positive'
+  | 'wrong_number'
   | 'opt_out'
   | 'invalid_phone'
   | 'duplicate'

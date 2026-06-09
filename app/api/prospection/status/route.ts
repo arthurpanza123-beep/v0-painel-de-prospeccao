@@ -61,13 +61,13 @@ export async function GET(request: Request) {
       : campaignStatus === 'running_dry_run'
       ? formatSeconds(nextSendInSeconds, 'Calculando...')
       : campaignStatus === 'paused'
-      ? 'Pausado'
+      ? (status as { safetyPauseMessage?: string | null }).safetyPauseMessage || 'Pausado'
       : campaignStatus === 'ready'
       ? 'Aguardando início'
       : campaignStatus === 'waiting_for_leads'
       ? 'Fila vazia'
       : campaignStatus === 'completed'
-      ? 'Simulação finalizada'
+      ? 'Campanha finalizada'
       : campaignStatus === 'cancelled'
       ? 'Cancelada'
       : campaignStatus === 'draft'
@@ -81,6 +81,7 @@ export async function GET(request: Request) {
       enviadosHoje: status.stats.sentToday,
       responderam: status.stats.responded,
       optOut: status.stats.optOut,
+      numeroErrado: (status.stats as { wrongNumber?: number }).wrongNumber || 0,
       proximoEnvio: nextSendInSeconds,
       proximoEnvioIso: nextSendAt,
     },
@@ -97,5 +98,6 @@ export async function GET(request: Request) {
     activeCampaign: status.activeCampaign,
     queue,
     flags,
+    safety_pause_message: (status as { safetyPauseMessage?: string | null }).safetyPauseMessage || null,
   })
 }

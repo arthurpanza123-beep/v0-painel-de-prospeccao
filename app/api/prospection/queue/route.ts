@@ -57,13 +57,13 @@ export async function GET(request: Request) {
       : campaignStatus === 'running_dry_run'
       ? formatSeconds(nextSendInSeconds, 'Calculando...')
       : campaignStatus === 'paused'
-      ? 'Pausado'
+      ? (status as { safetyPauseMessage?: string | null }).safetyPauseMessage || 'Pausado'
       : campaignStatus === 'ready'
       ? 'Aguardando início'
       : campaignStatus === 'waiting_for_leads'
       ? 'Fila vazia'
       : campaignStatus === 'completed'
-      ? 'Simulação finalizada'
+      ? 'Campanha finalizada'
       : campaignStatus === 'cancelled'
       ? 'Cancelada'
       : campaignStatus === 'draft'
@@ -81,5 +81,6 @@ export async function GET(request: Request) {
     is_paused: campaignStatus === 'paused',
     is_dry_run: flags.dryRun || !flags.enabled,
     real_sending_allowed: flags.realSendingAllowed,
+    safety_pause_message: (status as { safetyPauseMessage?: string | null }).safetyPauseMessage || null,
   })
 }

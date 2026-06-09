@@ -60,7 +60,7 @@ export function WhatsAppMiniCard({
   const refreshLabel = qrMayBeStale ? "Gerar novo QR" : "Atualizar QR"
 
   return (
-    <section className="glass-card flex h-full flex-col rounded-3xl p-5">
+    <section className="glass-card flex h-full flex-col rounded-xl p-5">
       <div className="flex items-center justify-between">
         <p className="text-[11px] font-semibold uppercase text-muted-foreground">
           WhatsApp

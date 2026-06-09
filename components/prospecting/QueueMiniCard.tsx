@@ -20,7 +20,7 @@ export function QueueMiniCard({ current, upNext, lastSent, campaignStatus, nextS
   const activeLead = current || visible[0] || null
 
   return (
-    <section className="glass-card flex h-full flex-col rounded-3xl p-5">
+    <section className="glass-card flex h-full flex-col rounded-xl p-5">
       <div className="flex items-center justify-between">
         <p className="text-[11px] font-semibold uppercase text-muted-foreground">
           Fila da campanha
@@ -43,7 +43,7 @@ export function QueueMiniCard({ current, upNext, lastSent, campaignStatus, nextS
               <polygon points="6 4 20 12 6 20 6 4" />
             </svg>
           </span>
-          <p className="mt-2 text-xs font-bold text-foreground">AGORA</p>
+          <p className="mt-2 text-xs font-bold text-foreground">Agora</p>
           <p className="max-w-[88px] truncate text-[11px] text-muted-foreground">
             {current?.nome || activeLead?.nome || emptyLabel}
           </p>

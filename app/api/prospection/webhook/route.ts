@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { classifyInbound, detectDevice } from '@/lib/prospection/classifier'
 import { getProspectionConfig } from '@/lib/prospection/config'
+import { sendProspectionText } from '@/lib/prospection/evolution'
 import { normalizePhone } from '@/lib/prospection/phone'
 import { triggerInstall, triggerWelcome } from '@/lib/prospection/panel2'
-import { recordFlowResult, recordInbound, recordProspectionEvent } from '@/lib/prospection/store'
+import { recordFlowResult, recordInbound, recordOutboundReply, recordProspectionEvent } from '@/lib/prospection/store'
 
 type FlowAction = {
   type?: unknown
@@ -11,6 +12,7 @@ type FlowAction = {
   phone?: unknown
   name?: unknown
   device?: unknown
+  body?: unknown
   idempotencyKey?: unknown
   leadId?: unknown
   campaignId?: unknown
@@ -77,7 +79,25 @@ async function runReservedAction(action: FlowAction, context: { remoteJid?: stri
   const leadId = action.leadId ? String(action.leadId) : null
   const campaignId = action.campaignId ? String(action.campaignId) : null
   const instanceName = action.instanceName ? String(action.instanceName) : null
-  if (!phone || !idempotencyKey) return
+  if (!phone) return
+  if (type === 'reply') {
+    const body = String(action.body || '').trim()
+    if (!body) return
+    const result = await sendProspectionText({ phone, message: body, allowCampaignRecipient: true })
+    await recordOutboundReply({
+      phone,
+      body,
+      leadId,
+      campaignId,
+      status: result.ok && 'dryRun' in result && result.dryRun ? 'dry_run' : result.ok ? 'sent' : 'failed',
+      evolutionMessageId: 'evolutionMessageId' in result ? result.evolutionMessageId : null,
+      error: result.ok ? null : String(result.code || 'REPLY_SEND_FAILED'),
+      eventType: String(action.code || 'PROSPECTION_REPLY_SENT'),
+    })
+    console.log(`[PROSPECTION_REPLY_TRIGGERED] ${JSON.stringify({ phone, ok: result.ok, code: result.code, action: action.code })}`)
+    return
+  }
+  if (!idempotencyKey) return
   const basePayload = {
     source: 'prospection',
     phone,
@@ -149,7 +169,7 @@ export async function POST(request: Request) {
   }
 
   const action = (record as { action?: FlowAction }).action || null
-  if (action && ['welcome', 'install'].includes(String(action.type || ''))) {
+  if (action && ['welcome', 'install', 'reply'].includes(String(action.type || ''))) {
     void runReservedAction(action, { remoteJid: pickRemoteJid(payload), messageId, fromMe: false, connectedInstancePhone: connectedPhone || null }).catch((error) => {
       console.warn(`[PROSPECTION_FLOW_FAILED] ${JSON.stringify({ phone, action: action.code, error: error instanceof Error ? error.message : String(error) })}`)
     })

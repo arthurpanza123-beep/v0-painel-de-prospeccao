@@ -424,8 +424,9 @@ export async function getStatus(input?: { campaignId?: string }) {
     imported: campaignLeads.length,
     queued: campaignLeads.filter((lead) => ['queued', 'scheduled'].includes(lead.status)).length,
     sentToday: campaignLeads.filter((lead) => lead.sent_at?.startsWith(today)).length,
-    responded: campaignLeads.filter((lead) => ['responded', 'responded_positive'].includes(lead.status)).length,
+    responded: campaignLeads.filter((lead) => ['responded', 'responded_positive', 'wrong_number'].includes(lead.status)).length,
     optOut: campaignLeads.filter((lead) => lead.status === 'opt_out').length,
+    wrongNumber: campaignLeads.filter((lead) => lead.status === 'wrong_number').length,
     nextSend: campaignLeads
       .filter((lead) => ['scheduled', 'queued'].includes(lead.status) && lead.scheduled_at)
       .sort((a, b) => String(a.scheduled_at || '').localeCompare(String(b.scheduled_at || '')))[0]?.scheduled_at || activeCampaign.next_send_after || null,
@@ -546,7 +547,9 @@ export async function completeSend(input: {
     if (input.status === 'dry_run') {
       event(db, { campaign_id: campaign.id, lead_id: lead.id, event_type: 'WORKER_SKIPPED_REAL_DISABLED', message: 'Envio real bloqueado; simulacao gravada.', metadata: { dryRun: true, evolutionMessageId: null } })
     }
-    const nextLead = db.leads.find((item) => item.campaign_id === campaign.id && item.status === 'queued')
+    const nextLead = db.leads
+      .filter((item) => item.campaign_id === campaign.id && ['queued', 'scheduled'].includes(item.status))
+      .sort((a, b) => String(a.scheduled_at || a.created_at).localeCompare(String(b.scheduled_at || b.created_at)))[0]
     if (nextLead) {
       nextLead.status = 'scheduled'
       nextLead.scheduled_at = new Date(Date.now() + randomDelaySeconds(campaign) * 1000).toISOString()
@@ -625,6 +628,36 @@ export async function recordFlowResult(input: { flow: 'welcome' | 'install'; pho
   })
 }
 
+export async function recordOutboundReply(input: { phone: string; body: string; status: 'sent' | 'dry_run' | 'failed'; leadId?: string | null; campaignId?: string | null; evolutionMessageId?: string | null; error?: string | null; eventType: string }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.recordOutboundReply(input)
+  return withLock(async (db) => {
+    const phone = normalizePhone(input.phone)
+    const lead = db.leads.find((item) => item.id === input.leadId) || db.leads.find((item) => item.phone_e164 === phone)
+    const timestamp = now()
+    db.messages.unshift({
+      id: id(),
+      campaign_id: input.campaignId || lead?.campaign_id || null,
+      lead_id: input.leadId || lead?.id || null,
+      direction: 'outbound',
+      type: 'manual',
+      template_id: null,
+      body: input.body,
+      status: input.status,
+      evolution_message_id: input.evolutionMessageId || null,
+      error_message: input.error || null,
+      created_at: timestamp,
+    })
+    event(db, {
+      campaign_id: input.campaignId || lead?.campaign_id || null,
+      lead_id: input.leadId || lead?.id || null,
+      event_type: input.eventType,
+      message: input.status === 'failed' ? 'Falha ao responder inbound.' : 'Resposta automatica enviada ou simulada.',
+      metadata: { targetPhone: phone, status: input.status, evolutionMessageId: input.evolutionMessageId || null, error: input.error || null },
+    })
+    return { ok: true }
+  })
+}
+
 export async function recordInbound(input: { phone: string; text: string; classification: string; device?: string; leadName?: string; messageId?: string | null; instanceName?: string | null }) {
   if (postgresBackend.isEnabled()) return postgresBackend.recordInbound(input)
   const phone = normalizePhone(input.phone)
@@ -645,7 +678,13 @@ export async function recordInbound(input: { phone: string; text: string; classi
       lead.last_response_text = input.text
       lead.responded_at = timestamp
       lead.updated_at = timestamp
-      lead.status = input.classification === 'positive' ? 'responded_positive' : input.classification === 'opt_out' ? 'opt_out' : 'responded'
+      lead.status = input.classification === 'positive'
+        ? 'responded_positive'
+        : input.classification === 'wrong_number'
+        ? 'wrong_number'
+        : input.classification === 'opt_out'
+        ? 'opt_out'
+        : 'responded'
     }
     const message: ProspectionMessage = {
       id: id(),
@@ -661,7 +700,7 @@ export async function recordInbound(input: { phone: string; text: string; classi
       created_at: timestamp,
     }
     db.messages.unshift(message)
-    if (input.classification === 'opt_out' && !db.optouts.some((optout) => optout.phone_e164 === phone)) {
+    if ((input.classification === 'opt_out' || input.classification === 'wrong_number') && !db.optouts.some((optout) => optout.phone_e164 === phone)) {
       const optout: ProspectionOptout = { id: id(), phone_e164: phone, reason: input.text, created_at: timestamp }
       db.optouts.unshift(optout)
     }

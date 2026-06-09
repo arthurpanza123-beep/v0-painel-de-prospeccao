@@ -188,6 +188,18 @@ function randomDelaySeconds(campaign: ProspectionCampaign) {
   return Math.floor(min + Math.random() * (max - min + 1))
 }
 
+function secondsUntil(value?: string | null) {
+  if (!value) return 0
+  const time = new Date(value).getTime()
+  if (!Number.isFinite(time)) return 0
+  return Math.max(0, Math.ceil((time - Date.now()) / 1000))
+}
+
+function isWithinAllowedWindow(campaign: ProspectionCampaign, date = new Date()) {
+  const current = date.toTimeString().slice(0, 5)
+  return current >= campaign.allowed_start_time && current <= campaign.allowed_end_time
+}
+
 function textHash(value: string) {
   return crypto.createHash('sha256').update(value).digest('hex').slice(0, 24)
 }
@@ -207,6 +219,9 @@ function flowWindowKey(prefix: 'welcome' | 'install', phone: string, device?: st
     ? `prospection:install:${phone}:${textHash(String(device || '').toLowerCase())}:${dayBucket}`
     : `prospection:welcome:${phone}:${dayBucket}`
 }
+
+const identityReply = `Oi, tudo bem? Aqui é o Bruno.\n\nEstou fazendo um contato comercial sobre uma opção de entretenimento com canais ao vivo, filmes e séries. Pode ter sido por uma base de pessoas com perfil de interesse nesse tipo de serviço.\n\nSe você quiser, te explico rapidinho e sem compromisso. Se não quiser receber, é só responder NÃO que eu não chamo mais.`
+const wrongNumberReply = 'Desculpa pelo engano. Vou corrigir aqui para não incomodar novamente.'
 
 function isRecent(value: unknown, hours: number) {
   if (!value) return false
@@ -290,7 +305,7 @@ async function ensureReady() {
     await client.query(`alter table prospection_leads drop constraint if exists prospection_leads_status_check`)
     await client.query(
       `alter table prospection_leads add constraint prospection_leads_status_check
-       check (status in ('imported','queued','scheduled','sending','sent','dry_run_sent','responded','responded_positive','opt_out','invalid_phone','duplicate','error'))`,
+       check (status in ('imported','queued','scheduled','sending','sent','dry_run_sent','responded','responded_positive','wrong_number','opt_out','invalid_phone','duplicate','error'))`,
     )
     await client.query(`alter table prospection_leads add column if not exists responded_positive_at timestamptz`)
     await client.query(`alter table prospection_leads add column if not exists welcome_triggered_at timestamptz`)
@@ -363,7 +378,7 @@ export async function updateCampaignStatus(campaignId: string, status: Prospecti
     if (!existing) throw new Error('Campanha nao encontrada.')
     if (status === 'running') {
       const openRows = await tx.query<{ count: string }>(
-        `select count(*)::text as count
+      `select count(*)::text as count
            from prospection_leads
           where campaign_id=$1 and status in ('queued','scheduled','sending')`,
         [campaignId],
@@ -377,21 +392,23 @@ export async function updateCampaignStatus(campaignId: string, status: Prospecti
     const campaign = rows[0]
     if (!campaign) throw new Error('Campanha nao encontrada.')
     if (status === 'running') {
-      const staleScheduled = await tx.query<{ id: string }>(
-        `select id from prospection_leads
-          where campaign_id=$1 and status='scheduled' and scheduled_at <= now()
+      const staleScheduled = await tx.query<{ id: string; scheduled_at?: string | null }>(
+        `select id, scheduled_at from prospection_leads
+          where campaign_id=$1 and status='scheduled'
           order by scheduled_at asc limit 1`,
         [campaignId],
       )
-      const queued = staleScheduled[0]
+      const scheduled = staleScheduled[0] as { id: string; scheduled_at?: string | null } | undefined
+      const queued = scheduled
         ? []
         : await tx.query<{ id: string }>(
             `select id from prospection_leads where campaign_id=$1 and status='queued' order by created_at asc limit 1`,
             [campaignId],
           )
-      const target = staleScheduled[0] || queued[0]
+      const target: { id: string; scheduled_at?: string | null } | undefined = scheduled || queued[0]
       if (target) {
-        const nextAt = new Date(Date.now() + randomDelaySeconds(campaign) * 1000).toISOString()
+        const futureScheduled = target.scheduled_at && new Date(String(target.scheduled_at)).getTime() > Date.now()
+        const nextAt = futureScheduled ? String(target.scheduled_at) : new Date().toISOString()
         await tx.query(`update prospection_leads set status='scheduled', scheduled_at=$2, updated_at=now() where id=$1`, [target.id, nextAt])
         await tx.query(`update prospection_campaigns set next_send_after=$2, updated_at=now() where id=$1`, [campaignId, nextAt])
         await tx.query(
@@ -575,20 +592,29 @@ export async function getStatus(input?: { campaignId?: string }) {
       activeCampaign: null,
     }
   }
-  const [statsRows, nextRows] = await Promise.all([
-    query<{ imported: string; queued: string; sent_today: string; responded: string; optout: string; next_send: string | null }>(
+  const [statsRows, nextRows, safetyRows] = await Promise.all([
+    query<{ imported: string; queued: string; sent_today: string; responded: string; optout: string; wrong_number: string; next_send: string | null }>(
       `select
         count(*)::text as imported,
         count(*) filter (where status in ('queued','scheduled'))::text as queued,
         count(*) filter (where sent_at::date = current_date)::text as sent_today,
-        count(*) filter (where status in ('responded','responded_positive'))::text as responded,
+        count(*) filter (where status in ('responded','responded_positive','wrong_number'))::text as responded,
         count(*) filter (where status = 'opt_out')::text as optout,
+        count(*) filter (where status = 'wrong_number')::text as wrong_number,
         min(scheduled_at) filter (where status in ('queued','scheduled'))::text as next_send
        from prospection_leads
        where campaign_id=$1`,
       [activeCampaign.id],
     ),
     query<{ next_send_after: string | null }>(`select next_send_after::text as next_send_after from prospection_campaigns where id=$1 and status='running' limit 1`, [activeCampaign.id]),
+    query<{ message: string; created_at: string }>(
+      `select message, created_at::text as created_at
+         from prospection_events
+        where campaign_id=$1 and event_type='PROSPECTION_RATE_LIMIT_SAFETY_PAUSED'
+        order by created_at desc
+        limit 1`,
+      [activeCampaign.id],
+    ),
   ])
   return {
     stats: {
@@ -597,15 +623,19 @@ export async function getStatus(input?: { campaignId?: string }) {
       sentToday: Number(statsRows[0]?.sent_today || 0),
       responded: Number(statsRows[0]?.responded || 0),
       optOut: Number(statsRows[0]?.optout || 0),
+      wrongNumber: Number(statsRows[0]?.wrong_number || 0),
       nextSend: statsRows[0]?.next_send || nextRows[0]?.next_send_after || null,
     },
     activeCampaign,
+    safetyPauseMessage: safetyRows[0]?.message || null,
   }
 }
 
 export async function reserveNextLead(input?: { force?: boolean; campaignId?: string }) {
   await ensureReady()
   return withTx(async (tx) => {
+    const lockRows = await tx.query<{ locked: boolean }>(`select pg_try_advisory_xact_lock(hashtext('prospection:global-send-next')) as locked`)
+    if (!lockRows[0]?.locked) return { ok: false as const, code: 'WORKER_LOCKED' as const }
     const campaignRows = input?.campaignId
       ? await tx.query<ProspectionCampaign>(
           `select * from prospection_campaigns where id=$1 and status in ('running','draft','paused') limit 1 for update`,
@@ -619,6 +649,31 @@ export async function reserveNextLead(input?: { force?: boolean; campaignId?: st
     const campaign = campaignRows[0]
     if (!campaign) return { ok: false as const, code: 'NO_RUNNING_CAMPAIGN' as const }
     if (!input?.force && campaign.status !== 'running') return { ok: false as const, code: 'NO_RUNNING_CAMPAIGN' as const }
+    if (!input?.force && !isWithinAllowedWindow(campaign)) return { ok: false as const, code: 'OUTSIDE_ALLOWED_WINDOW' as const }
+    if (campaign.next_send_after && new Date(String(campaign.next_send_after)).getTime() > Date.now()) {
+      return { ok: false as const, code: 'WAITING_NEXT_SEND' as const, nextSendAt: String(campaign.next_send_after), waitSeconds: secondsUntil(String(campaign.next_send_after)) }
+    }
+    const burstRows = await tx.query<{ diff_seconds: string }>(
+      `select extract(epoch from (max(created_at) - min(created_at)))::text as diff_seconds
+         from (
+           select created_at
+             from prospection_messages
+            where campaign_id=$1 and direction='outbound' and type='initial' and status='sent'
+            order by created_at desc
+            limit 2
+         ) recent`,
+      [campaign.id],
+    )
+    const recentDiff = Number(burstRows[0]?.diff_seconds ?? 999999)
+    if (Number.isFinite(recentDiff) && recentDiff >= 0 && recentDiff < 120) {
+      await tx.query(`update prospection_campaigns set status='paused', next_send_after=null, updated_at=now() where id=$1`, [campaign.id])
+      await tx.query(
+        `insert into prospection_events (campaign_id,event_type,message,metadata)
+         values ($1,'PROSPECTION_RATE_LIMIT_SAFETY_PAUSED','Pausado por segurança — intervalo mínimo não respeitado.',$2::jsonb)`,
+        [campaign.id, JSON.stringify({ reason: 'two_real_sends_under_120_seconds', diffSeconds: recentDiff })],
+      )
+      return { ok: false as const, code: 'PROSPECTION_RATE_LIMIT_SAFETY_PAUSED' as const, message: 'Pausado por segurança — intervalo mínimo não respeitado.' }
+    }
     const cutoff = new Date(Date.now() - campaign.rate_limit_window_minutes * 60 * 1000).toISOString()
     const rateRows = await tx.query<{ count: string }>(
       `select count(*)::text as count from prospection_messages where campaign_id=$1 and direction='outbound' and type='initial' and created_at >= $2`,
@@ -629,11 +684,21 @@ export async function reserveNextLead(input?: { force?: boolean; campaignId?: st
       `select * from prospection_leads
        where campaign_id=$1
          and status in ('queued','scheduled')
-         and ($2::boolean = true or coalesce(scheduled_at,created_at) <= now())
+         and coalesce(scheduled_at,created_at) <= now()
+         and not exists (select 1 from prospection_optouts o where o.phone_e164=prospection_leads.phone_e164)
+         and not exists (
+           select 1
+             from prospection_messages m
+             join prospection_leads sent_lead on sent_lead.id=m.lead_id
+            where sent_lead.phone_e164=prospection_leads.phone_e164
+              and m.direction='outbound'
+              and m.type='initial'
+              and m.status in ('sent','dry_run')
+         )
        order by coalesce(scheduled_at,created_at) asc
        limit 1
        for update skip locked`,
-      [campaign.id, Boolean(input?.force)],
+      [campaign.id],
     )
     const lead = leadRows[0]
     if (!lead) {
@@ -663,7 +728,6 @@ export async function reserveNextLead(input?: { force?: boolean; campaignId?: st
     const templates = templateRows.length ? templateRows : defaultTemplates
     const template = templates[(lead.send_attempts + Number(rateRows[0]?.count || 0)) % templates.length] || templates[0]
     const preview = renderTemplate(template.body, lead.name)
-    const nextScheduledAt = new Date(Date.now() + (campaign.min_delay_seconds + Math.floor(Math.random() * (campaign.max_delay_seconds - campaign.min_delay_seconds + 1))) * 1000).toISOString()
     await tx.query(`update prospection_leads set status='sending', template_id=$2, message_preview=$3, send_attempts=send_attempts+1, updated_at=now() where id=$1`, [lead.id, template.id, preview])
     await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,'LEAD_RESERVED','Lead reservado para simulacao.',$3::jsonb)`, [campaign.id, lead.id, JSON.stringify({ templateId: template.id })])
     if (getProspectionConfig().dryRun || !getProspectionConfig().enabled) {
@@ -673,7 +737,6 @@ export async function reserveNextLead(input?: { force?: boolean; campaignId?: st
         [campaign.id, lead.id, JSON.stringify({ templateId: template.id, force: Boolean(input?.force) })],
       )
     }
-    await tx.query(`update prospection_campaigns set next_send_after=$2, updated_at=now() where id=$1`, [campaign.id, nextScheduledAt])
     return { ok: true as const, campaign: toCampaign(camel(campaign)), lead: toLead(camel({ ...lead, template_id: template.id, message_preview: preview, send_attempts: lead.send_attempts + 1, status: 'sending' })), template }
   })
 }
@@ -692,7 +755,48 @@ export async function completeSend(input: { campaignId: string; leadId: string; 
         [input.campaignId, input.leadId, JSON.stringify({ dryRun: true, evolutionMessageId: null })],
       )
     }
-    const next = await tx.query<ProspectionLead>(`select * from prospection_leads where campaign_id=$1 and status='queued' order by created_at asc limit 1`, [input.campaignId])
+    if (input.status === 'sent') {
+      const burstRows = await tx.query<{ diff_seconds: string }>(
+        `select extract(epoch from (max(created_at) - min(created_at)))::text as diff_seconds
+           from (
+             select created_at
+               from prospection_messages
+              where campaign_id=$1 and direction='outbound' and type='initial' and status='sent'
+              order by created_at desc
+              limit 2
+           ) recent`,
+        [input.campaignId],
+      )
+      const recentDiff = Number(burstRows[0]?.diff_seconds ?? 999999)
+      if (Number.isFinite(recentDiff) && recentDiff >= 0 && recentDiff < 120) {
+        await tx.query(`update prospection_campaigns set status='paused', next_send_after=null, updated_at=now() where id=$1`, [input.campaignId])
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+           values ($1,$2,'PROSPECTION_RATE_LIMIT_SAFETY_PAUSED','Pausado por segurança — intervalo mínimo não respeitado.',$3::jsonb)`,
+          [input.campaignId, input.leadId, JSON.stringify({ reason: 'two_real_sends_under_120_seconds', diffSeconds: recentDiff })],
+        )
+        const leadRows = await tx.query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1`, [input.leadId])
+        const campaignRows = await tx.query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [input.campaignId])
+        return { lead: toLead(camel(leadRows[0])), campaign: toCampaign(camel(campaignRows[0])), message: { status: input.status, body: input.body, template_id: input.templateId }, safetyPaused: true }
+      }
+    }
+    const next = await tx.query<ProspectionLead>(
+      `select * from prospection_leads l
+        where l.campaign_id=$1
+          and l.status in ('queued','scheduled')
+          and not exists (select 1 from prospection_optouts o where o.phone_e164=l.phone_e164)
+          and not exists (
+            select 1
+              from prospection_messages m
+              join prospection_leads sent_lead on sent_lead.id=m.lead_id
+             where sent_lead.phone_e164=l.phone_e164
+               and m.direction='outbound'
+               and m.type='initial'
+               and m.status in ('sent','dry_run')
+          )
+        order by coalesce(l.scheduled_at,l.created_at) asc limit 1`,
+      [input.campaignId],
+    )
     if (next[0]) {
       const campaignRows = await tx.query<ProspectionCampaign>(`select * from prospection_campaigns where id=$1 limit 1`, [input.campaignId])
       const campaign = campaignRows[0]
@@ -860,7 +964,13 @@ export async function recordInbound(input: { phone: string; text: string; classi
     const lead = leadRows[0]
     const now = new Date().toISOString()
     if (lead) {
-      const nextStatus = input.classification === 'positive' ? 'responded_positive' : input.classification === 'opt_out' ? 'opt_out' : 'responded'
+      const nextStatus = input.classification === 'positive'
+        ? 'responded_positive'
+        : input.classification === 'wrong_number'
+        ? 'wrong_number'
+        : input.classification === 'opt_out'
+        ? 'opt_out'
+        : 'responded'
       await tx.query(
         `update prospection_leads
             set last_response_text=$2,
@@ -880,7 +990,7 @@ export async function recordInbound(input: { phone: string; text: string; classi
        on conflict (idempotency_key) where idempotency_key is not null do nothing`,
       [lead?.campaign_id || null, lead?.id || null, input.text, input.classification, input.messageId || null, key],
     )
-    if (input.classification === 'opt_out') {
+    if (input.classification === 'opt_out' || input.classification === 'wrong_number') {
       await tx.query(`insert into prospection_optouts (phone_e164, reason) values ($1,$2) on conflict (phone_e164) do update set reason=excluded.reason`, [phone, input.text])
     }
     await tx.query(`insert into prospection_events (campaign_id,lead_id,event_type,message,metadata) values ($1,$2,$3,'Resposta recebida.',$4::jsonb)`, [lead?.campaign_id || null, lead?.id || null, `INBOUND_${String(input.classification).toUpperCase()}`, JSON.stringify({ targetPhone: phone, device: input.device || null, messageId: input.messageId || null })])
@@ -908,7 +1018,47 @@ export async function recordInbound(input: { phone: string; text: string; classi
     }
 
     let action: Record<string, unknown> = { type: 'none', code: 'NO_FLOW_TRIGGERED' }
-    if (input.classification === 'positive') {
+    if (input.classification === 'wrong_number') {
+      const alreadyRepliedRows = await tx.query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_events
+          where event_type='WRONG_NUMBER_REPLY_TRIGGERED'
+            and metadata->>'targetPhone'=$1
+            and created_at >= now() - interval '24 hours'`,
+        [phone],
+      )
+      if (Number(alreadyRepliedRows[0]?.count || 0) > 0) {
+        action = { type: 'none', code: 'WRONG_NUMBER_REPLY_SKIPPED_ALREADY_SENT' }
+      } else {
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata,idempotency_key)
+           values ($1,$2,'WRONG_NUMBER_REPLY_TRIGGERED','Resposta de numero errado reservada.',$3::jsonb,$4)
+           on conflict (idempotency_key) where idempotency_key is not null do nothing`,
+          [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, instanceName }), `prospection:wrong-number-reply:${phone}:${new Date().toISOString().slice(0, 13)}`],
+        )
+        action = { type: 'reply', code: 'WRONG_NUMBER_REPLY_TRIGGERED', phone, body: wrongNumberReply, leadId: lead?.id || null, campaignId: lead?.campaign_id || null, instanceName }
+      }
+    } else if (input.classification === 'question_identity') {
+      const alreadyRepliedRows = await tx.query<{ count: string }>(
+        `select count(*)::text as count
+           from prospection_events
+          where event_type='IDENTITY_REPLY_TRIGGERED'
+            and metadata->>'targetPhone'=$1
+            and created_at >= now() - interval '24 hours'`,
+        [phone],
+      )
+      if (Number(alreadyRepliedRows[0]?.count || 0) > 0) {
+        action = { type: 'none', code: 'IDENTITY_REPLY_SKIPPED_ALREADY_SENT' }
+      } else {
+        await tx.query(
+          `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata,idempotency_key)
+           values ($1,$2,'IDENTITY_REPLY_TRIGGERED','Resposta de identidade/origem reservada.',$3::jsonb,$4)
+           on conflict (idempotency_key) where idempotency_key is not null do nothing`,
+          [lead?.campaign_id || null, lead?.id || null, JSON.stringify({ targetPhone: phone, instanceName }), `prospection:identity-reply:${phone}:${new Date().toISOString().slice(0, 13)}`],
+        )
+        action = { type: 'reply', code: 'IDENTITY_REPLY_TRIGGERED', phone, body: identityReply, leadId: lead?.id || null, campaignId: lead?.campaign_id || null, instanceName }
+      }
+    } else if (input.classification === 'positive') {
       const recentWelcomeRows = await tx.query<{ count: string }>(
         `select count(*)::text as count
            from prospection_events
@@ -1018,6 +1168,34 @@ export async function recordInbound(input: { phone: string; text: string; classi
   })
 }
 
+export async function recordOutboundReply(input: { phone: string; body: string; status: 'sent' | 'dry_run' | 'failed'; leadId?: string | null; campaignId?: string | null; evolutionMessageId?: string | null; error?: string | null; eventType: string }) {
+  await ensureReady()
+  const phone = normalizePhone(input.phone)
+  if (!phone) return
+  await withTx(async (tx) => {
+    const leadRows = input.leadId
+      ? await tx.query<ProspectionLead>(`select * from prospection_leads where id=$1 limit 1`, [input.leadId])
+      : await tx.query<ProspectionLead>(`select * from prospection_leads where phone_e164=$1 and status not in ('duplicate','invalid_phone') order by created_at desc limit 1`, [phone])
+    const lead = leadRows[0]
+    await tx.query(
+      `insert into prospection_messages (campaign_id,lead_id,direction,type,body,status,evolution_message_id,error_message)
+       values ($1,$2,'outbound','manual',$3,$4,$5,$6)`,
+      [input.campaignId || lead?.campaign_id || null, input.leadId || lead?.id || null, input.body, input.status, input.evolutionMessageId || null, input.error || null],
+    )
+    await tx.query(
+      `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
+       values ($1,$2,$3,$4,$5::jsonb)`,
+      [
+        input.campaignId || lead?.campaign_id || null,
+        input.leadId || lead?.id || null,
+        input.eventType,
+        input.status === 'failed' ? 'Falha ao responder inbound.' : 'Resposta automatica enviada ou simulada.',
+        JSON.stringify({ targetPhone: phone, status: input.status, evolutionMessageId: input.evolutionMessageId || null, error: input.error || null }),
+      ],
+    )
+  })
+}
+
 export async function authorizeRealRecipient(input: { phone: string; flow?: string; source?: string }) {
   await ensureReady()
   const config = getProspectionConfig()
@@ -1047,7 +1225,7 @@ export async function authorizeRealRecipient(input: { phone: string; flow?: stri
        join prospection_campaigns c on c.id = l.campaign_id
        left join prospection_optouts o on o.phone_e164 = l.phone_e164
       where l.phone_e164=$1
-        and l.status not in ('duplicate','invalid_phone','opt_out')
+        and l.status not in ('duplicate','invalid_phone','opt_out','wrong_number')
       order by l.created_at desc
       limit 1`,
     [phone],

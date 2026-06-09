@@ -33,6 +33,7 @@ type ApiStatus = {
     enviadosHoje: number
     responderam: number
     optOut: number
+    numeroErrado?: number
     proximoEnvio: number | null
   }
   campaign_status?: OperationalStatus
@@ -43,6 +44,7 @@ type ApiStatus = {
   queue_count?: number
   is_dry_run?: boolean
   real_sending_allowed?: boolean
+  safety_pause_message?: string | null
   whatsapp?: {
     status?: string
     state?: string
@@ -82,8 +84,8 @@ const DEFAULT_SENDING_RATE: SendingRate = {
   janelaMinutos: 50,
   intervaloMinMin: "2min40s",
   intervaloMaxMin: "4min30s",
-  horarioInicio: "09:00",
-  horarioFim: "20:00",
+  horarioInicio: "12:00",
+  horarioFim: "21:00",
 }
 
 const formatCountdown = (seconds?: number | null) => {
@@ -122,7 +124,7 @@ export default function ProspectingPage() {
   const [campaignStatus, setCampaignStatus] = useState<OperationalStatus>("no_campaign")
   const [sendingRate] = useState<SendingRate>(DEFAULT_SENDING_RATE)
   const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
-  const [stats, setStats] = useState({ leadsImportados: 0, naFila: 0, enviadosHoje: 0, responderam: 0, optOut: 0, proximoEnvio: "--:--" })
+  const [stats, setStats] = useState({ leadsImportados: 0, naFila: 0, enviadosHoje: 0, responderam: 0, optOut: 0, numeroErrado: 0, proximoEnvio: "--:--" })
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [queue, setQueue] = useState<{ current: Lead | null; upNext: Lead[]; lastSent: Lead | null }>({ current: null, upNext: [], lastSent: null })
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null)
@@ -148,19 +150,18 @@ export default function ProspectingPage() {
   const hasLeadsQueued = stats.naFila > 0 || Boolean(queue.current)
   const nextLead = queue.current || queue.upNext[0] || null
   const realBatchMode = Boolean(runtime.realSendingAllowed && !runtime.isDryRun)
-  const canSendNow = Boolean(activeCampaignId && realBatchMode && hasLeadsQueued && nextLead)
   const campaignLabel = campaignStatus === "no_campaign"
     ? "Sem campanha"
     : campaignStatus === "ready"
     ? "Pronta"
     : campaignStatus === "running_dry_run"
-    ? realBatchMode ? "Campanha ativa" : "Simulação ativa"
+    ? "Campanha ativa"
     : campaignStatus === "paused"
     ? "Pausada"
     : campaignStatus === "waiting_for_leads"
     ? "Aguardando leads"
     : campaignStatus === "completed"
-    ? "Simulação finalizada"
+    ? "Campanha finalizada"
     : campaignStatus === "cancelled"
     ? "Cancelada"
     : "Rascunho"
@@ -181,13 +182,13 @@ export default function ProspectingPage() {
     ? "Finalizada"
     : runtime.nextSendDisplay
   const nextSendDetail = isRunning && nextLead?.nome
-    ? `${nextLead.nome} · ${realBatchMode ? "envio real" : "simulação"}`
+      ? `${nextLead.nome} · ${realBatchMode ? "envio real" : "modo seguro"}`
     : isPaused && nextLead?.nome
     ? `${nextLead.nome} · próximo ao retomar`
     : campaignStatus === "completed" && queue.lastSent?.nome
     ? `${queue.lastSent.nome} · finalizado`
     : realBatchMode
-    ? "Envio real liberado para leads importados"
+    ? "Envio real liberado"
     : "Modo seguro"
   const nextSendQueueLabel = isRunning ? formatHumanCountdown(nextSendSeconds) : runtime.nextSendDisplay
   const qrAgeSeconds = qrUpdatedAt ? Math.max(0, Math.floor((nowMs - new Date(qrUpdatedAt).getTime()) / 1000)) : null
@@ -215,6 +216,7 @@ export default function ProspectingPage() {
       enviadosHoje: statusRes.stats?.enviadosHoje || 0,
       responderam: statusRes.stats?.responderam || 0,
       optOut: statusRes.stats?.optOut || 0,
+      numeroErrado: statusRes.stats?.numeroErrado || 0,
       proximoEnvio: statusRes.next_send_display || formatCountdown(statusRes.stats?.proximoEnvio),
     })
     const rawWhatsappStatus = String(statusRes.whatsapp?.status || "")
@@ -305,12 +307,12 @@ export default function ProspectingPage() {
       return
     }
     if (!(await askConfirmation({
-      title: realBatchMode ? "Iniciar envio real?" : "Iniciar simulação?",
+      title: realBatchMode ? "Iniciar campanha real?" : "Iniciar em modo seguro?",
       text: realBatchMode
-        ? `A campanha vai enviar mensagens reais pela centralplay-leads para ${stats.naFila} lead(s) importado(s) e validado(s).`
-        : "A campanha será processada em modo seguro. Nenhuma mensagem real será enviada.",
+        ? "Você confirma que deseja iniciar envio real? As mensagens serão enviadas respeitando o intervalo de 2min40s a 4min30s."
+        : "A campanha será processada sem envio real. Use esse modo para validar fila, timer e respostas.",
       cancelLabel: "Cancelar",
-      confirmLabel: realBatchMode ? "Iniciar envio real" : "Iniciar simulação",
+      confirmLabel: realBatchMode ? "Iniciar campanha" : "Iniciar",
     }))) return
     const id = await ensureCampaign()
     if (!id) return
@@ -352,18 +354,6 @@ export default function ProspectingPage() {
       tone: "danger",
     }))) return
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/cancel`, { method: "POST" })
-    await refresh()
-  }
-
-  const handleSendNow = async () => {
-    if (!activeCampaignId || !nextLead || !canSendNow) return
-    if (!(await askConfirmation({
-      title: `Enviar mensagem real para ${nextLead.nome}?`,
-      text: `Destino: ${nextLead.telefone}. Este envio será feito agora pela centralplay-leads.`,
-      cancelLabel: "Cancelar",
-      confirmLabel: "Enviar agora",
-    }))) return
-    await fetch(`/api/prospection/send-next?force=true&campaignId=${encodeURIComponent(activeCampaignId)}`, { method: "POST" })
     await refresh()
   }
 
@@ -439,8 +429,8 @@ export default function ProspectingPage() {
     : ["no_campaign", "completed", "cancelled"].includes(campaignStatus)
     ? "Nova campanha"
     : realBatchMode
-    ? "Iniciar envio real"
-    : "Iniciar simulação"
+    ? "Iniciar campanha real"
+    : "Iniciar"
 
   const handlePrimary = () => {
     if (isRunning) return void handlePause()
@@ -451,15 +441,13 @@ export default function ProspectingPage() {
 
   const secondaryActions = useMemo(() => {
     const actions: MenuAction[] = []
-    if (canSendNow) actions.push({ label: "Enviar agora", onSelect: () => void handleSendNow() })
     if (activeCampaignId && ["ready", "running_dry_run", "paused", "draft", "waiting_for_leads"].includes(campaignStatus)) {
       actions.push({ label: "Cancelar campanha", tone: "danger", onSelect: () => void handleCancel() })
     }
-    actions.push({ label: "Resetar teste autorizado", onSelect: () => void handleCleanupTest() })
-    actions.push({ label: "Limpar campanha de teste", tone: "danger", onSelect: () => void handleCleanupTest() })
+    actions.push({ label: "Limpar teste autorizado", onSelect: () => void handleCleanupTest() })
     actions.push({ label: "Desconectar WhatsApp", tone: "danger", onSelect: () => void handleDisconnectWhatsapp() })
     return actions
-  }, [activeCampaignId, campaignStatus, canSendNow])
+  }, [activeCampaignId, campaignStatus])
 
   const templateCount = templates.length
   const nextLeadName = nextLead?.nome || "Importe leads para começar"
@@ -480,8 +468,8 @@ export default function ProspectingPage() {
               </svg>
             </div>
             <div className="min-w-0 leading-tight">
-              <h1 className="truncate text-lg font-bold text-foreground sm:text-xl">Central Play Plus</h1>
-              <p className="text-xs text-muted-foreground">Prospecção</p>
+              <h1 className="truncate text-lg font-bold text-foreground sm:text-xl">Central Play Plus Prospecção</h1>
+              <p className="text-xs text-muted-foreground">Operação de WhatsApp</p>
             </div>
           </div>
 
@@ -540,9 +528,9 @@ export default function ProspectingPage() {
           />
 
           <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
-            <section className="glass-card flex min-h-[260px] flex-col rounded-3xl p-5 lg:col-span-2">
+            <section className="glass-card flex min-h-[260px] flex-col rounded-xl p-5 lg:col-span-2">
               <p className="text-[11px] font-semibold uppercase text-muted-foreground">
-                Central de operações
+                Próximo envio
               </p>
               <div className="mt-4 flex flex-1 items-center gap-4">
                 <div className="min-w-0 flex-1">
@@ -554,11 +542,11 @@ export default function ProspectingPage() {
                   </p>
                   <div className="mt-5 flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary">
-                      {runtime.realSendingAllowed ? "Campanha ativa" : "Modo seguro"}
+                      {runtime.realSendingAllowed ? "Envio real liberado" : "Modo seguro"}
                     </span>
                     {!runtime.realSendingAllowed && (
                       <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                        Envio real bloqueado
+                      Envio real bloqueado
                       </span>
                     )}
                     <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground">
@@ -605,14 +593,12 @@ export default function ProspectingPage() {
                     {sendingRate.intervaloMinMin} - {sendingRate.intervaloMaxMin}
                   </p>
                 </div>
-                {canSendNow && (
-                  <button
-                    onClick={() => void handleSendNow()}
-                    className="ml-auto rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-                  >
-                    Enviar agora
-                  </button>
-                )}
+                <div className="ml-auto text-right">
+                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Horário</p>
+                  <p className="text-sm font-semibold text-foreground tabular-nums">
+                    {sendingRate.horarioInicio} - {sendingRate.horarioFim}
+                  </p>
+                </div>
               </div>
             </section>
 
