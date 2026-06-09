@@ -92,14 +92,6 @@ const formatHumanCountdown = (seconds?: number | null) => {
   return minutes > 0 ? `${minutes}min ${String(rest).padStart(2, "0")}s` : `${rest}s`
 }
 
-const formatDuration = (minutes: number) => {
-  if (minutes <= 0) return "agora"
-  if (minutes < 60) return `${minutes}min`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest ? `${hours}h ${rest}min` : `${hours}h`
-}
-
 const pluralPeople = (value: number) => `${value} ${value === 1 ? "pessoa" : "pessoas"}`
 
 const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | null => {
@@ -193,12 +185,20 @@ export default function ProspectingPage() {
   const averageIntervalSeconds = 215
   const projectionForHours = (hours: number) => Math.min(queueSize, Math.floor((hours * 60 * 60) / averageIntervalSeconds))
   const todayOperationalHours = 9
-  const estimatedFinishMinutes = queueSize > 0 ? Math.ceil((queueSize * averageIntervalSeconds) / 60) : 0
   const projectionCards = [
     { label: "Próxima 1h", value: projectionForHours(1) },
     { label: "Próximas 5h", value: projectionForHours(5) },
     { label: "Dia útil", value: projectionForHours(todayOperationalHours) },
   ]
+  const nextSendFooterLabel = isRunning
+    ? nextSendSeconds == null
+      ? "calculando"
+      : nextSendSeconds <= 0
+      ? "pronto"
+      : formatHumanCountdown(nextSendSeconds)
+    : isPaused && runtime.nextSendAt
+    ? `retomar em ${formatHumanCountdown(Math.max(0, Math.ceil((new Date(runtime.nextSendAt).getTime() - localServerNowMs) / 1000)))}`
+    : runtime.nextSendDisplay
 
   const askConfirmation = useCallback((config: Omit<ConfirmDialog, "resolve">) => (
     new Promise<boolean>((resolve) => {
@@ -547,7 +547,7 @@ export default function ProspectingPage() {
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-background/35 px-4 py-3 text-xs text-muted-foreground">
                 <span>Status: <strong className="font-semibold text-foreground">{campaignLabel}</strong></span>
-                <span>Conclusão estimada: <strong className="font-semibold text-foreground">{queueSize ? formatDuration(estimatedFinishMinutes) : "fila vazia"}</strong></span>
+                <span>Próximo envio: <strong className="font-mono font-semibold tabular-nums text-foreground">{nextSendFooterLabel}</strong></span>
                 <span>{realBatchMode ? "Envio real liberado" : "Modo seguro"}</span>
               </div>
             </section>
