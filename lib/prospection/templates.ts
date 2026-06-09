@@ -5,6 +5,21 @@ const now = () => new Date().toISOString()
 
 const intro = 'Meu nome é *Bruno*. Estou entrando em contato para te apresentar uma opção de entretenimento com *canais ao vivo, filmes e séries*.'
 
+export function getTimeAwareGreeting(date = new Date()) {
+  const hour = Number(new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    hour12: false,
+    timeZone: 'America/Sao_Paulo',
+  }).format(date))
+  if (hour >= 5 && hour < 12) return 'Bom dia'
+  if (hour >= 12 && hour < 18) return 'Boa tarde'
+  return 'Boa noite'
+}
+
+function applyTimeAwareGreeting(body: string, date = new Date()) {
+  return body.replace(/^(Bom dia|Boa tarde|Boa noite)\b/, getTimeAwareGreeting(date))
+}
+
 export const defaultTemplates: ProspectionTemplate[] = [
   {
     id: 1,
@@ -91,9 +106,9 @@ export const defaultTemplates: ProspectionTemplate[] = [
 
 export function renderTemplate(body: string, name?: string | null) {
   const firstName = getTrustedFirstName(name)
-  if (firstName) return body.replace(/\{\{nome\}\}/g, firstName)
+  if (firstName) return applyTimeAwareGreeting(body.replace(/\{\{nome\}\}/g, firstName))
 
-  return body
+  return applyTimeAwareGreeting(body
     .replace(/^Olá, \*\{\{nome\}\}\*, tudo bem\?\n\n/, 'Olá, tudo bem?\n\n')
     .replace(/^Olá, \*\{\{nome\}\}\*, tudo certo\?\n\n/, 'Olá, tudo bem?\n\n')
     .replace(/^Oi, \*\{\{nome\}\}\*, tudo bem\?\n\n/, 'Oi, tudo bem?\n\n')
@@ -103,5 +118,5 @@ export function renderTemplate(body: string, name?: string | null) {
     .replace(/^Boa tarde, \*\{\{nome\}\}\*, tudo bem\?\n\n/, 'Boa tarde, tudo bem?\n\n')
     .replace(/^Boa tarde, \*\{\{nome\}\}\*, tudo certo\?\n\n/, 'Boa tarde, tudo bem?\n\n')
     .replace(/\s?\*\{\{nome\}\}\*/g, '')
-    .replace(/\s?\{\{nome\}\}/g, '')
+    .replace(/\s?\{\{nome\}\}/g, ''))
 }

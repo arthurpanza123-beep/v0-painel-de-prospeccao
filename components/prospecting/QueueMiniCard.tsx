@@ -22,10 +22,10 @@ export function QueueMiniCard({ current, upNext, lastSent, campaignStatus, nextS
   return (
     <section className="glass-card flex h-full flex-col rounded-xl p-5">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase text-muted-foreground">
-          Fila da campanha
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          Fila
         </p>
-        <span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold text-secondary-foreground">
+        <span className="rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
           {isPaused ? "Pausada" : isRunning ? "Em andamento" : activeLead ? "Pronta" : "Vazia"}
         </span>
       </div>
@@ -33,11 +33,7 @@ export function QueueMiniCard({ current, upNext, lastSent, campaignStatus, nextS
       <div className="mt-5 flex items-start overflow-x-auto pb-2">
         <div className="flex min-w-[70px] flex-col items-center text-center">
           <span
-            className={`grid h-12 w-12 place-items-center rounded-full text-primary-foreground ${isRunning ? "animate-pulse" : ""}`}
-            style={{
-              background: "linear-gradient(180deg, oklch(0.68 0.2 255), oklch(0.52 0.22 258))",
-              boxShadow: "0 1px 0 0 oklch(1 0 0 / 0.5) inset, 0 6px 14px -6px oklch(0.52 0.22 258 / 0.7)",
-            }}
+            className={`neon-action grid h-12 w-12 place-items-center rounded-full text-primary-foreground ${isRunning ? "animate-pulse" : ""}`}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
               <polygon points="6 4 20 12 6 20 6 4" />
@@ -51,9 +47,9 @@ export function QueueMiniCard({ current, upNext, lastSent, campaignStatus, nextS
 
         {visible.map((lead, index) => (
           <div key={lead.id} className="flex min-w-[96px] flex-1 items-start">
-            <span className="mt-6 h-px flex-1 bg-border" aria-hidden="true" />
+            <span className="mt-6 h-px flex-1 bg-primary/20" aria-hidden="true" />
             <div className="flex flex-col items-center text-center">
-              <span className="grid h-12 w-12 place-items-center rounded-full bg-secondary text-sm font-bold text-foreground shadow-[0_1px_0_0_oklch(1_0_0)_inset,0_2px_6px_-2px_oklch(0.45_0.05_255_/_0.18)]">
+              <span className="grid h-12 w-12 place-items-center rounded-full border border-border bg-secondary/80 text-sm font-bold text-foreground shadow-[0_0_22px_-14px_var(--primary)]">
                 {index + 1}
               </span>
               <p className="mt-2 max-w-[88px] truncate text-xs font-semibold text-foreground">{lead.nome}</p>
@@ -64,9 +60,9 @@ export function QueueMiniCard({ current, upNext, lastSent, campaignStatus, nextS
 
         {remaining > 0 && (
           <div className="flex min-w-[74px] flex-1 items-start">
-            <span className="mt-6 h-px flex-1 bg-border" aria-hidden="true" />
+            <span className="mt-6 h-px flex-1 bg-primary/20" aria-hidden="true" />
             <div className="flex flex-col items-center text-center">
-              <span className="grid h-12 w-12 place-items-center rounded-full border border-dashed border-border bg-card text-xs font-bold text-muted-foreground">
+              <span className="grid h-12 w-12 place-items-center rounded-full border border-dashed border-primary/30 bg-card text-xs font-bold text-muted-foreground">
                 +{remaining}
               </span>
               <p className="mt-2 text-[11px] text-muted-foreground">Na fila</p>

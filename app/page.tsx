@@ -9,8 +9,6 @@ import { QueueMiniCard } from "@/components/prospecting/QueueMiniCard"
 import { WhatsAppMiniCard } from "@/components/prospecting/WhatsAppMiniCard"
 import {
   type Lead,
-  type MessageTemplate,
-  type SendingRate,
   type WhatsAppStatus,
 } from "@/lib/mock-data"
 
@@ -79,15 +77,6 @@ type ApiLead = {
   sent_at?: string | null
 }
 
-const DEFAULT_SENDING_RATE: SendingRate = {
-  limitePorLote: 15,
-  janelaMinutos: 50,
-  intervaloMinMin: "2min40s",
-  intervaloMaxMin: "4min30s",
-  horarioInicio: "12:00",
-  horarioFim: "21:00",
-}
-
 const formatCountdown = (seconds?: number | null) => {
   if (seconds == null) return "--:--"
   const minutes = Math.floor(seconds / 60)
@@ -102,6 +91,16 @@ const formatHumanCountdown = (seconds?: number | null) => {
   const rest = seconds % 60
   return minutes > 0 ? `${minutes}min ${String(rest).padStart(2, "0")}s` : `${rest}s`
 }
+
+const formatDuration = (minutes: number) => {
+  if (minutes <= 0) return "agora"
+  if (minutes < 60) return `${minutes}min`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `${hours}h ${rest}min` : `${hours}h`
+}
+
+const pluralPeople = (value: number) => `${value} ${value === 1 ? "pessoa" : "pessoas"}`
 
 const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | null => {
   if (!lead) return null
@@ -122,10 +121,8 @@ const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | n
 export default function ProspectingPage() {
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
   const [campaignStatus, setCampaignStatus] = useState<OperationalStatus>("no_campaign")
-  const [sendingRate] = useState<SendingRate>(DEFAULT_SENDING_RATE)
   const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
   const [stats, setStats] = useState({ leadsImportados: 0, naFila: 0, enviadosHoje: 0, responderam: 0, optOut: 0, numeroErrado: 0, proximoEnvio: "--:--" })
-  const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [queue, setQueue] = useState<{ current: Lead | null; upNext: Lead[]; lastSent: Lead | null }>({ current: null, upNext: [], lastSent: null })
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null)
   const [activeCampaignName, setActiveCampaignName] = useState<string | null>(null)
@@ -192,6 +189,16 @@ export default function ProspectingPage() {
     : "Modo seguro"
   const nextSendQueueLabel = isRunning ? formatHumanCountdown(nextSendSeconds) : runtime.nextSendDisplay
   const qrAgeSeconds = qrUpdatedAt ? Math.max(0, Math.floor((nowMs - new Date(qrUpdatedAt).getTime()) / 1000)) : null
+  const queueSize = Math.max(runtime.queueCount || 0, stats.naFila || 0)
+  const averageIntervalSeconds = 215
+  const projectionForHours = (hours: number) => Math.min(queueSize, Math.floor((hours * 60 * 60) / averageIntervalSeconds))
+  const todayOperationalHours = 9
+  const estimatedFinishMinutes = queueSize > 0 ? Math.ceil((queueSize * averageIntervalSeconds) / 60) : 0
+  const projectionCards = [
+    { label: "Próxima 1h", value: projectionForHours(1) },
+    { label: "Próximas 5h", value: projectionForHours(5) },
+    { label: "Dia útil", value: projectionForHours(todayOperationalHours) },
+  ]
 
   const askConfirmation = useCallback((config: Omit<ConfirmDialog, "resolve">) => (
     new Promise<boolean>((resolve) => {
@@ -206,10 +213,7 @@ export default function ProspectingPage() {
   }
 
   const refresh = useCallback(async () => {
-    const [statusRes, templatesRes] = await Promise.all([
-      fetch("/api/prospection/status", { cache: "no-store" }).then((response) => response.json() as Promise<ApiStatus>),
-      fetch("/api/prospection/templates", { cache: "no-store" }).then((response) => response.json()),
-    ])
+    const statusRes = await fetch("/api/prospection/status", { cache: "no-store" }).then((response) => response.json() as Promise<ApiStatus>)
     setStats({
       leadsImportados: statusRes.stats?.leadsImportados || 0,
       naFila: statusRes.stats?.naFila || 0,
@@ -254,11 +258,6 @@ export default function ProspectingPage() {
       upNext: (statusRes.queue?.upcoming || []).map((lead) => mapLead(lead, "aguardando")).filter(Boolean) as Lead[],
       lastSent: mapLead(statusRes.queue?.lastSent || null, "enviado"),
     })
-    setTemplates((templatesRes.templates || []).map((template: { id: number; name: string; body: string }) => ({
-      id: template.id,
-      titulo: template.name,
-      corpo: template.body,
-    })))
   }, [])
 
   useEffect(() => {
@@ -449,7 +448,6 @@ export default function ProspectingPage() {
     return actions
   }, [activeCampaignId, campaignStatus])
 
-  const templateCount = templates.length
   const nextLeadName = nextLead?.nome || "Importe leads para começar"
   const nextLeadLabel = isRunning
     ? `Enviando: ${nextLeadName}`
@@ -469,40 +467,17 @@ export default function ProspectingPage() {
             </div>
             <div className="min-w-0 leading-tight">
               <h1 className="truncate text-lg font-bold text-foreground sm:text-xl">Central Play Plus Prospecção</h1>
-              <p className="text-xs text-muted-foreground">Operação de WhatsApp</p>
+              <p className="text-xs text-muted-foreground">Fila real, timer e respostas</p>
             </div>
           </div>
 
-          <span
-            className={`hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold sm:inline-flex ${
-              whatsappStatus === "conectado"
-                ? "bg-[var(--success)]/12 text-[var(--success)]"
-                : whatsappStatus === "conectando"
-                ? "bg-primary/12 text-primary"
-                : "bg-destructive/12 text-destructive"
-            }`}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                whatsappStatus === "conectado" ? "bg-[var(--success)]" : whatsappStatus === "conectando" ? "bg-primary animate-pulse" : "bg-destructive"
-              }`}
-            />
-            {whatsappStatus === "conectado" ? "WhatsApp conectado" : whatsappStatus === "conectando" ? "Conectando..." : "WhatsApp desconectado"}
-          </span>
-
           <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={handleConfigureWhatsApp}
-              className="hidden rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary sm:inline-flex"
-            >
-              Configurar WhatsApp
-            </button>
             <button
               onClick={handlePrimary}
               disabled={campaignStatus === "error"}
-              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold uppercase transition-colors sm:text-sm ${
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold uppercase transition-all sm:text-sm ${
                 isRunning
-                  ? "bg-secondary text-foreground hover:bg-muted"
+                  ? "border border-border bg-secondary text-foreground hover:bg-muted"
                   : "btn-glossy text-primary-foreground"
               } disabled:opacity-40`}
             >
@@ -528,43 +503,23 @@ export default function ProspectingPage() {
           />
 
           <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
-            <section className="glass-card flex min-h-[260px] flex-col rounded-xl p-5 lg:col-span-2">
-              <p className="text-[11px] font-semibold uppercase text-muted-foreground">
-                Próximo envio
-              </p>
-              <div className="mt-4 flex flex-1 items-center gap-4">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-2xl font-bold leading-tight text-foreground sm:text-3xl">
+            <section className="neon-panel flex min-h-[320px] flex-col rounded-xl p-5 lg:col-span-2">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
+                    Próximo disparo
+                  </p>
+                  <h2 className="mt-4 text-5xl font-bold leading-none tracking-normal text-foreground sm:text-7xl">
                     {isRunning ? <span className="font-mono tabular-nums">{nextSendHeadline}</span> : campaignLabel}
                   </h2>
-                  <p className="mt-2 text-sm text-muted-foreground">
+                  <p className="mt-4 truncate text-sm text-muted-foreground sm:text-base">
                     {nextLeadLabel}
                   </p>
-                  <div className="mt-5 flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary">
-                      {runtime.realSendingAllowed ? "Envio real liberado" : "Modo seguro"}
-                    </span>
-                    {!runtime.realSendingAllowed && (
-                      <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                      Envio real bloqueado
-                      </span>
-                    )}
-                    <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                      {templateCount} variações ativas
-                    </span>
-                  </div>
                 </div>
                 <button
                   onClick={handlePrimary}
                   aria-label={primaryLabel}
-                  className="grid h-16 w-16 shrink-0 place-items-center rounded-full text-primary-foreground transition-transform duration-200 hover:scale-105 active:scale-95 sm:h-20 sm:w-20"
-                  style={{
-                    background: isRunning
-                      ? "linear-gradient(180deg, oklch(0.7 0.04 255), oklch(0.55 0.04 255))"
-                      : "linear-gradient(180deg, oklch(0.68 0.2 255), oklch(0.52 0.22 258))",
-                    boxShadow:
-                      "0 1px 0 0 oklch(1 0 0 / 0.5) inset, 0 -3px 8px oklch(0.3 0.1 258 / 0.4) inset, 0 8px 18px -6px oklch(0.52 0.22 258 / 0.6)",
-                  }}
+                  className="neon-action grid h-16 w-16 shrink-0 place-items-center rounded-full text-primary-foreground transition-transform duration-200 hover:scale-105 active:scale-95 sm:h-20 sm:w-20"
                 >
                   {isRunning ? (
                     <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -578,27 +533,22 @@ export default function ProspectingPage() {
                   )}
                 </button>
               </div>
-              <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl bg-secondary/60 px-4 py-3">
-                <div>
-                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Lote</p>
-                  <p className="text-sm font-semibold text-foreground tabular-nums">{sendingRate.limitePorLote}</p>
+              <div className="mt-auto grid gap-3 pt-7 sm:grid-cols-4">
+                <div className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">Fila ativa</p>
+                  <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{queueSize}</p>
                 </div>
-                <div>
-                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Janela</p>
-                  <p className="text-sm font-semibold text-foreground tabular-nums">{sendingRate.janelaMinutos}min</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Intervalo</p>
-                  <p className="text-sm font-semibold text-foreground tabular-nums">
-                    {sendingRate.intervaloMinMin} - {sendingRate.intervaloMaxMin}
-                  </p>
-                </div>
-                <div className="ml-auto text-right">
-                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Horário</p>
-                  <p className="text-sm font-semibold text-foreground tabular-nums">
-                    {sendingRate.horarioInicio} - {sendingRate.horarioFim}
-                  </p>
-                </div>
+                {projectionCards.map((item) => (
+                  <div key={item.label} className="rounded-xl border border-border bg-secondary/45 px-4 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
+                    <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{pluralPeople(item.value)}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-background/35 px-4 py-3 text-xs text-muted-foreground">
+                <span>Status: <strong className="font-semibold text-foreground">{campaignLabel}</strong></span>
+                <span>Conclusão estimada: <strong className="font-semibold text-foreground">{queueSize ? formatDuration(estimatedFinishMinutes) : "fila vazia"}</strong></span>
+                <span>{realBatchMode ? "Envio real liberado" : "Modo seguro"}</span>
               </div>
             </section>
 
