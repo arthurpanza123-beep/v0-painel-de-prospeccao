@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   const queueCount = status.stats.queued + (queue.current ? 1 : 0)
   const campaign = status.activeCampaign
   const current = queue.current
-  const rawNextSend = campaign?.status === 'running' || campaign?.status === 'paused' ? status.stats.nextSend || campaign.next_send_after || null : null
+  const rawNextSend = campaign?.status === 'running' || campaign?.status === 'paused' ? campaign.next_send_after || status.stats.nextSend || null : null
   const nextSendAt = toIso(rawNextSend)
   const nextSendInSeconds = campaign?.status === 'running' ? secondsUntilNext(nextSendAt) : null
   const campaignStatus = !campaign
