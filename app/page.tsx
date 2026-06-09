@@ -86,10 +86,16 @@ const formatCountdown = (seconds?: number | null) => {
 
 const formatHumanCountdown = (seconds?: number | null) => {
   if (seconds == null) return "Aguardando início"
-  if (seconds <= 0) return "Pronto para enviar"
+  if (seconds <= 0) return "00s"
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
   return minutes > 0 ? `${minutes}min ${String(rest).padStart(2, "0")}s` : `${rest}s`
+}
+
+const formatRemainingLabel = (seconds?: number | null) => {
+  if (seconds == null) return "calculando"
+  if (seconds <= 0) return "00s"
+  return `faltam ${formatHumanCountdown(seconds)}`
 }
 
 const pluralPeople = (value: number) => `${value} ${value === 1 ? "pessoa" : "pessoas"}`
@@ -164,8 +170,6 @@ export default function ProspectingPage() {
       ? "Enviando..."
       : nextSendSeconds == null
       ? "Calculando..."
-      : nextSendSeconds === 0
-      ? "Pronto"
       : formatCountdown(nextSendSeconds)
     : campaignStatus === "completed"
     ? "Finalizada"
@@ -191,13 +195,11 @@ export default function ProspectingPage() {
     { label: "Dia útil", value: projectionForHours(todayOperationalHours) },
   ]
   const nextSendFooterLabel = isRunning
-    ? nextSendSeconds == null
-      ? "calculando"
-      : nextSendSeconds <= 0
-      ? "pronto"
-      : formatHumanCountdown(nextSendSeconds)
+    ? nextSendSeconds != null && nextSendSeconds <= 0
+      ? "00s - aguardando worker"
+      : formatRemainingLabel(nextSendSeconds)
     : isPaused && runtime.nextSendAt
-    ? `retomar em ${formatHumanCountdown(Math.max(0, Math.ceil((new Date(runtime.nextSendAt).getTime() - localServerNowMs) / 1000)))}`
+    ? "timer pausado"
     : runtime.nextSendDisplay
 
   const askConfirmation = useCallback((config: Omit<ConfirmDialog, "resolve">) => (
