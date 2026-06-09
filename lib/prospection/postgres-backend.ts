@@ -653,8 +653,9 @@ export async function reserveNextLead(input?: { force?: boolean; campaignId?: st
     if (campaign.next_send_after && new Date(String(campaign.next_send_after)).getTime() > Date.now()) {
       return { ok: false as const, code: 'WAITING_NEXT_SEND' as const, nextSendAt: String(campaign.next_send_after), waitSeconds: secondsUntil(String(campaign.next_send_after)) }
     }
-    const burstRows = await tx.query<{ diff_seconds: string }>(
-      `select extract(epoch from (max(created_at) - min(created_at)))::text as diff_seconds
+    const burstRows = await tx.query<{ sent_count: string; diff_seconds: string | null }>(
+      `select count(*)::text as sent_count,
+              extract(epoch from (max(created_at) - min(created_at)))::text as diff_seconds
          from (
            select created_at
              from prospection_messages
@@ -664,8 +665,9 @@ export async function reserveNextLead(input?: { force?: boolean; campaignId?: st
          ) recent`,
       [campaign.id],
     )
+    const recentSentCount = Number(burstRows[0]?.sent_count || 0)
     const recentDiff = Number(burstRows[0]?.diff_seconds ?? 999999)
-    if (Number.isFinite(recentDiff) && recentDiff >= 0 && recentDiff < 120) {
+    if (recentSentCount >= 2 && Number.isFinite(recentDiff) && recentDiff >= 0 && recentDiff < 120) {
       await tx.query(`update prospection_campaigns set status='paused', next_send_after=null, updated_at=now() where id=$1`, [campaign.id])
       await tx.query(
         `insert into prospection_events (campaign_id,event_type,message,metadata)
@@ -756,8 +758,9 @@ export async function completeSend(input: { campaignId: string; leadId: string; 
       )
     }
     if (input.status === 'sent') {
-      const burstRows = await tx.query<{ diff_seconds: string }>(
-        `select extract(epoch from (max(created_at) - min(created_at)))::text as diff_seconds
+      const burstRows = await tx.query<{ sent_count: string; diff_seconds: string | null }>(
+        `select count(*)::text as sent_count,
+                extract(epoch from (max(created_at) - min(created_at)))::text as diff_seconds
            from (
              select created_at
                from prospection_messages
@@ -767,8 +770,9 @@ export async function completeSend(input: { campaignId: string; leadId: string; 
            ) recent`,
         [input.campaignId],
       )
+      const recentSentCount = Number(burstRows[0]?.sent_count || 0)
       const recentDiff = Number(burstRows[0]?.diff_seconds ?? 999999)
-      if (Number.isFinite(recentDiff) && recentDiff >= 0 && recentDiff < 120) {
+      if (recentSentCount >= 2 && Number.isFinite(recentDiff) && recentDiff >= 0 && recentDiff < 120) {
         await tx.query(`update prospection_campaigns set status='paused', next_send_after=null, updated_at=now() where id=$1`, [input.campaignId])
         await tx.query(
           `insert into prospection_events (campaign_id,lead_id,event_type,message,metadata)
