@@ -1,22 +1,20 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { MetricsBar } from "@/components/prospecting/MetricsBar"
-import { WhatsAppMiniCard } from "@/components/prospecting/WhatsAppMiniCard"
+import { ActionMenu, type MenuAction } from "@/components/prospecting/ActionMenu"
+import { ConfirmModal } from "@/components/prospecting/ConfirmModal"
 import { ImportMiniCard } from "@/components/prospecting/ImportMiniCard"
-import { RateMiniCard } from "@/components/prospecting/RateMiniCard"
-import { MessagePreviewCard } from "@/components/prospecting/MessagePreviewCard"
+import { MetricsBar } from "@/components/prospecting/MetricsBar"
 import { QueueMiniCard } from "@/components/prospecting/QueueMiniCard"
+import { WhatsAppMiniCard } from "@/components/prospecting/WhatsAppMiniCard"
 import {
-  mockTemplates,
-  mockSendingRate,
-  type WhatsAppStatus,
-  type SendingRate,
   type Lead,
   type MessageTemplate,
+  type SendingRate,
+  type WhatsAppStatus,
 } from "@/lib/mock-data"
 
-type MobileTab = "whatsapp" | "importar" | "ritmo" | "mensagem" | "fila"
+type MobileTab = "whatsapp" | "importar" | "fila"
 type OperationalStatus = "no_campaign" | "draft" | "ready" | "running_dry_run" | "paused" | "waiting_for_leads" | "completed" | "cancelled" | "error"
 
 type ConfirmDialog = {
@@ -43,7 +41,6 @@ type ApiStatus = {
   next_send_display?: string
   current_time_server?: string
   queue_count?: number
-  is_paused?: boolean
   is_dry_run?: boolean
   real_sending_allowed?: boolean
   whatsapp?: {
@@ -78,7 +75,15 @@ type ApiLead = {
   template_id?: number | null
   scheduled_at?: string | null
   sent_at?: string | null
-  created_at?: string | null
+}
+
+const DEFAULT_SENDING_RATE: SendingRate = {
+  limitePorLote: 15,
+  janelaMinutos: 50,
+  intervaloMinMin: "2min40s",
+  intervaloMaxMin: "4min30s",
+  horarioInicio: "09:00",
+  horarioFim: "20:00",
 }
 
 const formatCountdown = (seconds?: number | null) => {
@@ -89,8 +94,8 @@ const formatCountdown = (seconds?: number | null) => {
 }
 
 const formatHumanCountdown = (seconds?: number | null) => {
-  if (seconds == null) return "Calculando..."
-  if (seconds <= 0) return "Aguardando worker..."
+  if (seconds == null) return "Aguardando início"
+  if (seconds <= 0) return "Pronto para enviar"
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
   return minutes > 0 ? `${minutes}min ${String(rest).padStart(2, "0")}s` : `${rest}s`
@@ -115,10 +120,10 @@ const mapLead = (lead: ApiLead | null, fallbackStatus: Lead["status"]): Lead | n
 export default function ProspectingPage() {
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>("desconectado")
   const [campaignStatus, setCampaignStatus] = useState<OperationalStatus>("no_campaign")
-  const [sendingRate, setSendingRate] = useState(mockSendingRate)
+  const [sendingRate] = useState<SendingRate>(DEFAULT_SENDING_RATE)
   const [mobileTab, setMobileTab] = useState<MobileTab>("whatsapp")
   const [stats, setStats] = useState({ leadsImportados: 0, naFila: 0, enviadosHoje: 0, responderam: 0, optOut: 0, proximoEnvio: "--:--" })
-  const [templates, setTemplates] = useState<MessageTemplate[]>(mockTemplates)
+  const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [queue, setQueue] = useState<{ current: Lead | null; upNext: Lead[]; lastSent: Lead | null }>({ current: null, upNext: [], lastSent: null })
   const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null)
   const [activeCampaignName, setActiveCampaignName] = useState<string | null>(null)
@@ -127,7 +132,6 @@ export default function ProspectingPage() {
   const [qrRequestState, setQrRequestState] = useState<"idle" | "loading" | "done">("idle")
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [whatsappMeta, setWhatsappMeta] = useState<{ instance?: string; number?: string | null; profileName?: string | null }>({})
-  const [safetyFlags, setSafetyFlags] = useState({ dryRun: true, enabled: false, realSendingAllowed: false })
   const [runtime, setRuntime] = useState({
     nextSendAt: null as string | null,
     serverNowMs: Date.now(),
@@ -141,49 +145,52 @@ export default function ProspectingPage() {
 
   const isRunning = campaignStatus === "running_dry_run"
   const isPaused = campaignStatus === "paused"
-  const hasLeadsQueued = stats.naFila > 0
+  const hasLeadsQueued = stats.naFila > 0 || Boolean(queue.current)
+  const nextLead = queue.current || queue.upNext[0] || null
+  const realBatchMode = Boolean(runtime.realSendingAllowed && !runtime.isDryRun)
+  const canSendNow = Boolean(activeCampaignId && realBatchMode && hasLeadsQueued && nextLead)
   const campaignLabel = campaignStatus === "no_campaign"
     ? "Sem campanha"
     : campaignStatus === "ready"
     ? "Pronta"
     : campaignStatus === "running_dry_run"
-    ? "Simulação ativa"
+    ? realBatchMode ? "Campanha ativa" : "Simulação ativa"
     : campaignStatus === "paused"
     ? "Pausada"
     : campaignStatus === "waiting_for_leads"
-    ? "Fila vazia"
+    ? "Aguardando leads"
     : campaignStatus === "completed"
     ? "Simulação finalizada"
     : campaignStatus === "cancelled"
     ? "Cancelada"
     : "Rascunho"
-  const queueEmptyLabel = campaignStatus === "paused" ? "Campanha pausada" : campaignStatus === "waiting_for_leads" ? "Nenhum lead na fila" : campaignStatus === "ready" ? "Aguardando início" : "Fila vazia"
-  const nextLeadName = queue.current?.nome || queue.upNext[0]?.nome || ""
+
   const localServerNowMs = runtime.serverNowMs + (nowMs - runtime.receivedAtMs)
   const nextSendSeconds = runtime.nextSendAt && isRunning
     ? Math.max(0, Math.ceil((new Date(runtime.nextSendAt).getTime() - localServerNowMs) / 1000))
     : null
   const nextSendHeadline = isRunning
     ? queue.current
-      ? "Processando..."
+      ? "Enviando..."
       : nextSendSeconds == null
       ? "Calculando..."
       : nextSendSeconds === 0
-      ? "Aguardando worker..."
+      ? "Pronto"
       : formatCountdown(nextSendSeconds)
+    : campaignStatus === "completed"
+    ? "Finalizada"
     : runtime.nextSendDisplay
-  const nextSendDetail = isRunning && nextLeadName
-    ? `${nextLeadName} · simulação`
-    : isPaused && nextLeadName
-    ? `${nextLeadName} · próximo ao retomar`
-    : campaignStatus === "ready" && nextLeadName
-    ? `${nextLeadName} · pronta para simulação`
+  const nextSendDetail = isRunning && nextLead?.nome
+    ? `${nextLead.nome} · ${realBatchMode ? "envio real" : "simulação"}`
+    : isPaused && nextLead?.nome
+    ? `${nextLead.nome} · próximo ao retomar`
     : campaignStatus === "completed" && queue.lastSent?.nome
-    ? `${queue.lastSent.nome} · nenhum WhatsApp real enviado`
-    : runtime.isDryRun
-    ? "Modo seguro"
-    : "Envio real"
+    ? `${queue.lastSent.nome} · finalizado`
+    : realBatchMode
+    ? "Envio real liberado para leads importados"
+    : "Modo seguro"
   const nextSendQueueLabel = isRunning ? formatHumanCountdown(nextSendSeconds) : runtime.nextSendDisplay
+  const qrAgeSeconds = qrUpdatedAt ? Math.max(0, Math.floor((nowMs - new Date(qrUpdatedAt).getTime()) / 1000)) : null
 
   const askConfirmation = useCallback((config: Omit<ConfirmDialog, "resolve">) => (
     new Promise<boolean>((resolve) => {
@@ -199,8 +206,8 @@ export default function ProspectingPage() {
 
   const refresh = useCallback(async () => {
     const [statusRes, templatesRes] = await Promise.all([
-      fetch("/api/prospection/status", { cache: "no-store" }).then((r) => r.json() as Promise<ApiStatus>),
-      fetch("/api/prospection/templates", { cache: "no-store" }).then((r) => r.json()),
+      fetch("/api/prospection/status", { cache: "no-store" }).then((response) => response.json() as Promise<ApiStatus>),
+      fetch("/api/prospection/templates", { cache: "no-store" }).then((response) => response.json()),
     ])
     setStats({
       leadsImportados: statusRes.stats?.leadsImportados || 0,
@@ -231,7 +238,6 @@ export default function ProspectingPage() {
     setActiveCampaignId(statusRes.activeCampaign?.id || null)
     setActiveCampaignName(statusRes.activeCampaign?.name || null)
     setCampaignStatus(statusRes.campaign_status || "no_campaign")
-    setSafetyFlags(statusRes.flags || { dryRun: true, enabled: false, realSendingAllowed: false })
     setRuntime({
       nextSendAt: statusRes.next_send_at || null,
       serverNowMs: statusRes.current_time_server ? new Date(statusRes.current_time_server).getTime() : Date.now(),
@@ -264,57 +270,66 @@ export default function ProspectingPage() {
     return () => clearInterval(timer)
   }, [])
 
-  const qrAgeSeconds = qrUpdatedAt ? Math.max(0, Math.floor((nowMs - new Date(qrUpdatedAt).getTime()) / 1000)) : null
-
-  const ensureCampaign = async () => {
-    if (activeCampaignId && !["completed", "cancelled", "no_campaign"].includes(campaignStatus)) return activeCampaignId
-    const response = await fetch("/api/prospection/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `Campanha ${new Date().toLocaleString("pt-BR")}` }) })
-    const payload = await response.json()
-    const id = payload.campaign?.id
-    setActiveCampaignId(id)
-    setActiveCampaignName(payload.campaign?.name || null)
-    setCampaignStatus("draft")
-    return id
-  }
-
-  const handleNewCampaign = async () => {
-    if (!(await askConfirmation({
-      title: "Criar nova campanha limpa?",
-      text: "Isso não apaga histórico antigo, apenas inicia uma nova campanha separada.",
-      cancelLabel: "Voltar",
-      confirmLabel: "Criar nova",
-    }))) return
-    const response = await fetch("/api/prospection/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `Campanha ${new Date().toLocaleString("pt-BR")}` }) })
+  const createCampaign = async (name: string) => {
+    const response = await fetch("/api/prospection/campaigns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    })
     const payload = await response.json()
     setActiveCampaignId(payload.campaign?.id || null)
     setActiveCampaignName(payload.campaign?.name || null)
     setCampaignStatus("draft")
     await refresh()
+    return payload.campaign?.id || null
+  }
+
+  const ensureCampaign = async () => {
+    if (activeCampaignId && !["completed", "cancelled", "no_campaign"].includes(campaignStatus)) return activeCampaignId
+    return createCampaign("Campanha de prospecção")
+  }
+
+  const handleNewCampaign = async () => {
+    if (!(await askConfirmation({
+      title: "Criar campanha limpa?",
+      text: "Uma nova campanha será criada sem apagar o histórico anterior. Importe a planilha antes de iniciar.",
+      cancelLabel: "Voltar",
+      confirmLabel: "Nova campanha",
+    }))) return
+    await createCampaign("Campanha de prospecção")
   }
 
   const handleStart = async () => {
+    if (!hasLeadsQueued) {
+      setMobileTab("importar")
+      return
+    }
     if (!(await askConfirmation({
-      title: "Iniciar simulação?",
-      text: "A campanha vai processar a fila em modo seguro. Nenhum WhatsApp real será enviado enquanto o envio real estiver bloqueado.",
+      title: realBatchMode ? "Iniciar envio real?" : "Iniciar simulação?",
+      text: realBatchMode
+        ? `A campanha vai enviar mensagens reais pela centralplay-leads para ${stats.naFila} lead(s) importado(s) e validado(s).`
+        : "A campanha será processada em modo seguro. Nenhuma mensagem real será enviada.",
       cancelLabel: "Cancelar",
-      confirmLabel: "Iniciar simulação",
+      confirmLabel: realBatchMode ? "Iniciar envio real" : "Iniciar simulação",
     }))) return
     const id = await ensureCampaign()
     if (!id) return
     await fetch(`/api/prospection/campaigns/${id}/start`, { method: "POST" })
     await refresh()
   }
+
   const handlePause = async () => {
     if (!activeCampaignId) return
     if (!(await askConfirmation({
       title: "Pausar campanha?",
-      text: "Os envios serão interrompidos até você retomar.",
+      text: "A fila será interrompida até você retomar.",
       cancelLabel: "Cancelar",
       confirmLabel: "Pausar",
     }))) return
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/pause`, { method: "POST" })
     await refresh()
   }
+
   const handleResume = async () => {
     if (!activeCampaignId) return
     if (!(await askConfirmation({
@@ -326,6 +341,7 @@ export default function ProspectingPage() {
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/resume`, { method: "POST" })
     await refresh()
   }
+
   const handleCancel = async () => {
     if (!activeCampaignId) return
     if (!(await askConfirmation({
@@ -338,26 +354,26 @@ export default function ProspectingPage() {
     await fetch(`/api/prospection/campaigns/${activeCampaignId}/cancel`, { method: "POST" })
     await refresh()
   }
-  const handleSimulateNow = async () => {
-    if (!activeCampaignId) return
+
+  const handleSendNow = async () => {
+    if (!activeCampaignId || !nextLead || !canSendNow) return
     if (!(await askConfirmation({
-      title: "Simular próximo envio?",
-      text: "Isso vai processar o próximo lead em modo seguro. Nenhum WhatsApp real será enviado.",
+      title: `Enviar mensagem real para ${nextLead.nome}?`,
+      text: `Destino: ${nextLead.telefone}. Este envio será feito agora pela centralplay-leads.`,
       cancelLabel: "Cancelar",
-      confirmLabel: "Simular agora",
+      confirmLabel: "Enviar agora",
     }))) return
     await fetch(`/api/prospection/send-next?force=true&campaignId=${encodeURIComponent(activeCampaignId)}`, { method: "POST" })
     await refresh()
   }
-  const handleImportLeadsAction = () => {
-    setMobileTab("importar")
-  }
+
   const confirmTestReimport = useCallback(() => askConfirmation({
-    title: "Reimportar número de operador?",
-    text: "Use isso apenas para testar com número autorizado. Essa ação não deve ser usada para leads comuns.",
+    title: "Reimportar número autorizado?",
+    text: "Use apenas para 5522988473304 ou 5522988345946. Leads comuns duplicados continuam bloqueados.",
     cancelLabel: "Cancelar",
     confirmLabel: "Reimportar teste",
   }), [askConfirmation])
+
   const handleConfigureWhatsApp = useCallback(async () => {
     setQrRequestState("loading")
     setWhatsappStatus("conectando")
@@ -371,13 +387,11 @@ export default function ProspectingPage() {
       setQrRequestState("done")
     }
   }, [])
-  const handleRefreshQR = () => {
-    void handleConfigureWhatsApp()
-  }
 
   useEffect(() => {
     if (whatsappStatus !== "conectado" && !qrCode && qrRequestState === "idle") void handleConfigureWhatsApp()
   }, [handleConfigureWhatsApp, qrCode, qrRequestState, whatsappStatus])
+
   const handleConfirmImport = async (file: File, forceTestReimport = false) => {
     const campaignId = await ensureCampaign()
     const form = new FormData()
@@ -389,162 +403,219 @@ export default function ProspectingPage() {
     await refresh()
     return payload.summary || null
   }
-  const handleSaveRate = (rate: SendingRate) => setSendingRate(rate)
-  const handleEditVariations = () => {}
-  const handleViewHistory = () => {}
 
-  const templateList = useMemo(() => templates.length ? templates : mockTemplates, [templates])
+  const handleCleanupTest = async () => {
+    if (!(await askConfirmation({
+      title: "Limpar campanha de teste?",
+      text: "Somente dados marcados como teste serão limpos.",
+      cancelLabel: "Cancelar",
+      confirmLabel: "Limpar teste",
+      tone: "danger",
+    }))) return
+    await fetch("/api/prospection/admin/cleanup-test-data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: "LIMPAR_TESTES_DRY_RUN" }),
+    })
+    await refresh()
+  }
+
+  const handleDisconnectWhatsapp = async () => {
+    if (!(await askConfirmation({
+      title: "Desconectar WhatsApp?",
+      text: "A instância centralplay-leads será desconectada.",
+      cancelLabel: "Cancelar",
+      confirmLabel: "Desconectar",
+      tone: "danger",
+    }))) return
+    await fetch("/api/prospection/whatsapp/disconnect", { method: "POST" })
+    await refresh()
+  }
+
+  const primaryLabel = isRunning
+    ? "Pausar"
+    : isPaused
+    ? "Retomar"
+    : ["no_campaign", "completed", "cancelled"].includes(campaignStatus)
+    ? "Nova campanha"
+    : realBatchMode
+    ? "Iniciar envio real"
+    : "Iniciar simulação"
+
+  const handlePrimary = () => {
+    if (isRunning) return void handlePause()
+    if (isPaused) return void handleResume()
+    if (["no_campaign", "completed", "cancelled"].includes(campaignStatus)) return void handleNewCampaign()
+    return void handleStart()
+  }
+
+  const secondaryActions = useMemo(() => {
+    const actions: MenuAction[] = []
+    if (canSendNow) actions.push({ label: "Enviar agora", onSelect: () => void handleSendNow() })
+    if (activeCampaignId && ["ready", "running_dry_run", "paused", "draft", "waiting_for_leads"].includes(campaignStatus)) {
+      actions.push({ label: "Cancelar campanha", tone: "danger", onSelect: () => void handleCancel() })
+    }
+    actions.push({ label: "Resetar teste autorizado", onSelect: () => void handleCleanupTest() })
+    actions.push({ label: "Limpar campanha de teste", tone: "danger", onSelect: () => void handleCleanupTest() })
+    actions.push({ label: "Desconectar WhatsApp", tone: "danger", onSelect: () => void handleDisconnectWhatsapp() })
+    return actions
+  }, [activeCampaignId, campaignStatus, canSendNow])
+
+  const templateCount = templates.length
+  const nextLeadName = nextLead?.nome || "Importe leads para começar"
+  const nextLeadLabel = isRunning
+    ? `Enviando: ${nextLeadName}`
+    : hasLeadsQueued
+    ? `Próximo: ${nextLeadName}`
+    : "Importe leads para começar"
 
   return (
-    <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
-      {/* Header compacto */}
-      <header className="shrink-0 border-b border-border bg-background/95 px-3 backdrop-blur sm:px-5">
-        <div className="mx-auto flex h-12 max-w-screen-2xl items-center gap-2 sm:gap-3">
-          {/* Logo */}
-          <div className="flex shrink-0 items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-primary">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
-                <polygon points="5 3 19 12 5 21 5 3" />
+    <div className="relative flex min-h-[100dvh] flex-col overflow-x-hidden">
+      <div className="mx-auto flex min-w-0 w-full max-w-6xl flex-1 flex-col px-3 sm:px-5 lg:px-6">
+        <header className="flex shrink-0 items-center gap-3 py-4 sm:py-5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="btn-glossy flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="text-primary-foreground" aria-hidden="true">
+                <polygon points="6 4 20 12 6 20 6 4" />
               </svg>
             </div>
-            <div className="leading-none">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-foreground">
-                Central Play Plus
-              </p>
-              <p className="text-[10px] text-muted-foreground">Prospecção</p>
+            <div className="min-w-0 leading-tight">
+              <h1 className="truncate text-lg font-bold text-foreground sm:text-xl">Central Play Plus</h1>
+              <p className="text-xs text-muted-foreground">Prospecção</p>
             </div>
           </div>
 
-          {/* Status WhatsApp */}
           <span
-            className={`ml-1 hidden items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium sm:inline-flex ${
+            className={`hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold sm:inline-flex ${
               whatsappStatus === "conectado"
-                ? "bg-[var(--success)]/15 text-[var(--success)]"
+                ? "bg-[var(--success)]/12 text-[var(--success)]"
                 : whatsappStatus === "conectando"
-                ? "bg-primary/15 text-primary"
-                : "bg-destructive/15 text-destructive"
+                ? "bg-primary/12 text-primary"
+                : "bg-destructive/12 text-destructive"
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                whatsappStatus === "conectado"
-                  ? "bg-[var(--success)]"
-                  : whatsappStatus === "conectando"
-                  ? "bg-primary animate-pulse"
-                  : "bg-destructive"
+                whatsappStatus === "conectado" ? "bg-[var(--success)]" : whatsappStatus === "conectando" ? "bg-primary animate-pulse" : "bg-destructive"
               }`}
             />
-            {whatsappStatus === "conectado"
-              ? "WhatsApp conectado"
-              : whatsappStatus === "conectando"
-              ? "Conectando..."
-              : "WhatsApp desconectado"}
+            {whatsappStatus === "conectado" ? "WhatsApp conectado" : whatsappStatus === "conectando" ? "Conectando..." : "WhatsApp desconectado"}
           </span>
 
-          {/* Ações */}
-          <div className="ml-auto flex items-center gap-1.5">
-            <span title={activeCampaignName || campaignLabel} className="hidden max-w-[220px] truncate rounded-full bg-secondary px-2 py-1 text-[10px] font-medium text-muted-foreground md:inline-flex">
-              Campanha de teste · {campaignLabel}
-            </span>
-            {(runtime.isDryRun || !runtime.realSendingAllowed) && (
-              <span title="Envio real bloqueado" className="hidden rounded-full bg-[var(--warning)]/15 px-2 py-1 text-[10px] font-semibold text-[var(--warning)] sm:inline-flex">
-                Modo seguro
-              </span>
-            )}
+          <div className="ml-auto flex items-center gap-2">
             <button
               onClick={handleConfigureWhatsApp}
-              className="hidden rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
+              className="hidden rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary sm:inline-flex"
             >
               Configurar WhatsApp
             </button>
-            {!["no_campaign", "completed", "cancelled"].includes(campaignStatus) && (
-              <button
-                onClick={handleNewCampaign}
-                className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-              >
-                <span className="hidden sm:inline">Nova campanha</span>
-                <span className="sm:hidden">Nova</span>
-              </button>
-            )}
-            {activeCampaignId && ["paused", "ready", "draft", "waiting_for_leads"].includes(campaignStatus) && (
-              <button
-                onClick={handleCancel}
-                className="hidden rounded-md border border-destructive/30 px-2.5 py-1.5 text-[11px] font-medium text-destructive/80 transition-colors hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
-              >
-                Cancelar
-              </button>
-            )}
-            {activeCampaignId && ["ready", "running_dry_run"].includes(campaignStatus) && (
-              <button
-                onClick={handleSimulateNow}
-                className="rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-              >
-                <span className="hidden sm:inline">Simular agora</span>
-                <span className="sm:hidden">Simular</span>
-              </button>
-            )}
-            {isRunning && (
-              <button
-                onClick={handlePause}
-                className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
-              >
-                Pausar
-              </button>
-            )}
-            {!isRunning && (
-              <button
-                onClick={isPaused ? handleResume : ["no_campaign", "completed", "cancelled"].includes(campaignStatus) ? handleNewCampaign : ["draft", "waiting_for_leads"].includes(campaignStatus) ? handleImportLeadsAction : handleStart}
-                disabled={campaignStatus === "error"}
-                className="rounded-md bg-primary px-3.5 py-1.5 text-[11px] font-semibold text-primary-foreground shadow-[0_0_0_1px_var(--primary)] shadow-primary/30 transition-colors hover:bg-primary/90 disabled:opacity-40"
-              >
-                {["no_campaign", "completed", "cancelled"].includes(campaignStatus)
-                  ? (
-                    <>
-                      <span className="hidden sm:inline">Nova campanha</span>
-                      <span className="sm:hidden">Nova</span>
-                    </>
-                  )
-                  : isPaused
-                  ? "Retomar"
-                  : ["draft", "waiting_for_leads"].includes(campaignStatus)
-                  ? (
-                    <>
-                      <span className="hidden sm:inline">Importar leads</span>
-                      <span className="sm:hidden">Importar</span>
-                    </>
-                  )
-                  : (
-                    <>
-                      <span className="hidden sm:inline">Iniciar simulação</span>
-                      <span className="sm:hidden">Iniciar</span>
-                    </>
-                  )}
-              </button>
-            )}
-            {isRunning && (
-              <span className="hidden items-center gap-1.5 rounded-md bg-secondary px-3.5 py-1.5 text-[11px] font-semibold text-foreground sm:flex">
-                <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
-                Simulação ativa
-              </span>
+            <button
+              onClick={handlePrimary}
+              disabled={campaignStatus === "error"}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold uppercase transition-colors sm:text-sm ${
+                isRunning
+                  ? "bg-secondary text-foreground hover:bg-muted"
+                  : "btn-glossy text-primary-foreground"
+              } disabled:opacity-40`}
+            >
+              {!isRunning && (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <polygon points="6 4 20 12 6 20 6 4" />
+                </svg>
               )}
+              {primaryLabel}
+            </button>
+            <ActionMenu actions={secondaryActions} />
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Conteúdo — cabe na viewport */}
-      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4">
-        <MetricsBar
-          stats={stats}
-          nextSend={{
-            value: nextSendHeadline,
-            detail: nextSendDetail,
-            tone: isPaused ? "text-[var(--warning)]" : isRunning ? "text-primary" : "text-[var(--warning)]",
-          }}
-        />
+        <main className="flex flex-1 flex-col gap-3 pb-6 sm:gap-4">
+          <MetricsBar
+            stats={stats}
+            nextSend={{
+              value: nextSendHeadline,
+              detail: nextSendDetail,
+              tone: isPaused ? "text-[var(--warning)]" : isRunning ? "text-primary" : "text-[var(--warning)]",
+            }}
+          />
 
-        {/* DESKTOP: grid de blocos */}
-        <div className="hidden flex-1 grid-rows-[minmax(0,0.95fr)_minmax(0,0.85fr)] gap-3 overflow-hidden lg:grid">
-          <div className="grid grid-cols-3 gap-3 overflow-hidden">
+          <div className="grid gap-3 sm:gap-4 lg:grid-cols-3">
+            <section className="glass-card flex min-h-[260px] flex-col rounded-3xl p-5 lg:col-span-2">
+              <p className="text-[11px] font-semibold uppercase text-muted-foreground">
+                Central de operações
+              </p>
+              <div className="mt-4 flex flex-1 items-center gap-4">
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-2xl font-bold leading-tight text-foreground sm:text-3xl">
+                    {isRunning ? <span className="font-mono tabular-nums">{nextSendHeadline}</span> : campaignLabel}
+                  </h2>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    {nextLeadLabel}
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary">
+                      {runtime.realSendingAllowed ? "Campanha ativa" : "Modo seguro"}
+                    </span>
+                    {!runtime.realSendingAllowed && (
+                      <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                        Envio real bloqueado
+                      </span>
+                    )}
+                    <span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                      {templateCount} variações ativas
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={handlePrimary}
+                  aria-label={primaryLabel}
+                  className="grid h-16 w-16 shrink-0 place-items-center rounded-full text-primary-foreground transition-transform duration-200 hover:scale-105 active:scale-95 sm:h-20 sm:w-20"
+                  style={{
+                    background: isRunning
+                      ? "linear-gradient(180deg, oklch(0.7 0.04 255), oklch(0.55 0.04 255))"
+                      : "linear-gradient(180deg, oklch(0.68 0.2 255), oklch(0.52 0.22 258))",
+                    boxShadow:
+                      "0 1px 0 0 oklch(1 0 0 / 0.5) inset, 0 -3px 8px oklch(0.3 0.1 258 / 0.4) inset, 0 8px 18px -6px oklch(0.52 0.22 258 / 0.6)",
+                  }}
+                >
+                  {isRunning ? (
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <rect x="6" y="5" width="4" height="14" rx="1" />
+                      <rect x="14" y="5" width="4" height="14" rx="1" />
+                    </svg>
+                  ) : (
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" className="ml-1" aria-hidden="true">
+                      <polygon points="6 4 20 12 6 20 6 4" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl bg-secondary/60 px-4 py-3">
+                <div>
+                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Lote</p>
+                  <p className="text-sm font-semibold text-foreground tabular-nums">{sendingRate.limitePorLote}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Janela</p>
+                  <p className="text-sm font-semibold text-foreground tabular-nums">{sendingRate.janelaMinutos}min</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Intervalo</p>
+                  <p className="text-sm font-semibold text-foreground tabular-nums">
+                    {sendingRate.intervaloMinMin} - {sendingRate.intervaloMaxMin}
+                  </p>
+                </div>
+                {canSendNow && (
+                  <button
+                    onClick={() => void handleSendNow()}
+                    className="ml-auto rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                  >
+                    Enviar agora
+                  </button>
+                )}
+              </div>
+            </section>
+
             <WhatsAppMiniCard
               status={whatsappStatus}
               qrCode={qrCode}
@@ -552,112 +623,94 @@ export default function ProspectingPage() {
               instanceName={whatsappMeta.instance || "centralplay-leads"}
               connectedNumber={whatsappMeta.number}
               profileName={whatsappMeta.profileName}
-              onRefreshQR={handleRefreshQR}
-            />
-            <ImportMiniCard onConfirmImport={handleConfirmImport} onConfirmTestReimport={confirmTestReimport} />
-            <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
-          </div>
-          <div className="grid grid-cols-2 gap-3 overflow-hidden">
-            <MessagePreviewCard templates={templateList} onEdit={handleEditVariations} />
-            <QueueMiniCard
-              current={queue.current}
-              upNext={queue.upNext}
-              lastSent={queue.lastSent}
-              campaignStatus={campaignStatus}
-              nextSendLabel={nextSendQueueLabel}
-              emptyLabel={queueEmptyLabel}
-              onViewHistory={handleViewHistory}
+              onRefreshQR={handleConfigureWhatsApp}
             />
           </div>
-        </div>
 
-        {/* MOBILE: abas */}
-        <div className="flex flex-1 flex-col overflow-hidden lg:hidden">
-          <div className="flex-1 overflow-hidden">
-            {mobileTab === "whatsapp" && (
-              <WhatsAppMiniCard
-                status={whatsappStatus}
-                qrCode={qrCode}
-                qrAgeSeconds={qrAgeSeconds}
-                instanceName={whatsappMeta.instance || "centralplay-leads"}
-                connectedNumber={whatsappMeta.number}
-                profileName={whatsappMeta.profileName}
-                onRefreshQR={handleRefreshQR}
-              />
-            )}
-            {mobileTab === "importar" && (
-              <ImportMiniCard onConfirmImport={handleConfirmImport} onConfirmTestReimport={confirmTestReimport} />
-            )}
-            {mobileTab === "ritmo" && (
-              <RateMiniCard initialRate={sendingRate} onSave={handleSaveRate} />
-            )}
-            {mobileTab === "mensagem" && (
-              <MessagePreviewCard templates={templateList} onEdit={handleEditVariations} />
-            )}
-            {mobileTab === "fila" && (
+          <div className="hidden grid-cols-3 gap-3 sm:gap-4 lg:grid">
+            <ImportMiniCard
+              leadsImportados={stats.leadsImportados}
+              onConfirmImport={handleConfirmImport}
+              onConfirmTestReimport={confirmTestReimport}
+            />
+            <div className="lg:col-span-2">
               <QueueMiniCard
                 current={queue.current}
                 upNext={queue.upNext}
                 lastSent={queue.lastSent}
                 campaignStatus={campaignStatus}
                 nextSendLabel={nextSendQueueLabel}
-                emptyLabel={queueEmptyLabel}
-                onViewHistory={handleViewHistory}
+                emptyLabel={campaignStatus === "paused" ? "Campanha pausada" : "Fila vazia"}
               />
-            )}
-          </div>
-
-          {/* Abas inferiores */}
-          <nav className="mt-3 grid shrink-0 grid-cols-5 gap-1 rounded-lg border border-border bg-card p-1">
-            {[
-              { id: "whatsapp" as const, label: "WhatsApp" },
-              { id: "importar" as const, label: "Importar" },
-              { id: "ritmo" as const, label: "Ritmo" },
-              { id: "mensagem" as const, label: "Msg" },
-              { id: "fila" as const, label: "Fila" },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setMobileTab(tab.id)}
-                aria-pressed={mobileTab === tab.id}
-                className={`rounded-md py-2 text-[10px] font-medium transition-colors ${
-                  mobileTab === tab.id
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-      </main>
-      {confirmDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-card p-4 shadow-2xl">
-            <h2 className="text-sm font-semibold text-foreground">{confirmDialog.title}</h2>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{confirmDialog.text}</p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={() => closeConfirmation(false)}
-                className="rounded-md border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-              >
-                {confirmDialog.cancelLabel}
-              </button>
-              <button
-                onClick={() => closeConfirmation(true)}
-                className={`rounded-md px-3 py-1.5 text-[11px] font-semibold transition-colors ${
-                  confirmDialog.tone === "danger"
-                    ? "bg-destructive/15 text-destructive hover:bg-destructive/20"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90"
-                }`}
-              >
-                {confirmDialog.confirmLabel}
-              </button>
             </div>
           </div>
-        </div>
-      )}
+
+          <div className="flex flex-1 flex-col lg:hidden">
+            <div className="flex-1">
+              {mobileTab === "whatsapp" && (
+                <WhatsAppMiniCard
+                  status={whatsappStatus}
+                  qrCode={qrCode}
+                  qrAgeSeconds={qrAgeSeconds}
+                  instanceName={whatsappMeta.instance || "centralplay-leads"}
+                  connectedNumber={whatsappMeta.number}
+                  profileName={whatsappMeta.profileName}
+                  onRefreshQR={handleConfigureWhatsApp}
+                />
+              )}
+              {mobileTab === "importar" && (
+                <ImportMiniCard
+                  leadsImportados={stats.leadsImportados}
+                  onConfirmImport={handleConfirmImport}
+                  onConfirmTestReimport={confirmTestReimport}
+                />
+              )}
+              {mobileTab === "fila" && (
+                <QueueMiniCard
+                  current={queue.current}
+                  upNext={queue.upNext}
+                  lastSent={queue.lastSent}
+                  campaignStatus={campaignStatus}
+                  nextSendLabel={nextSendQueueLabel}
+                  emptyLabel={campaignStatus === "paused" ? "Campanha pausada" : "Fila vazia"}
+                />
+              )}
+            </div>
+
+            <nav className="mt-3 grid shrink-0 grid-cols-3 gap-1 rounded-2xl border border-border bg-card p-1">
+              {[
+                { id: "whatsapp" as const, label: "WhatsApp" },
+                { id: "importar" as const, label: "Importar" },
+                { id: "fila" as const, label: "Fila" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setMobileTab(tab.id)}
+                  aria-pressed={mobileTab === tab.id}
+                  className={`rounded-xl py-2 text-xs font-medium transition-colors ${
+                    mobileTab === tab.id
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+        </main>
+      </div>
+
+      <ConfirmModal
+        open={Boolean(confirmDialog)}
+        title={confirmDialog?.title || ""}
+        description={confirmDialog?.text || ""}
+        cancelLabel={confirmDialog?.cancelLabel}
+        confirmLabel={confirmDialog?.confirmLabel || "Confirmar"}
+        tone={confirmDialog?.tone || "primary"}
+        onClose={() => closeConfirmation(false)}
+        onConfirm={() => closeConfirmation(true)}
+      />
     </div>
   )
 }

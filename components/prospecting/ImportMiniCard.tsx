@@ -2,28 +2,31 @@
 
 import { useRef, useState } from "react"
 
+interface ImportSummary {
+  imported: number
+  valid: number
+  queued: number
+  duplicates: number
+  invalid: number
+  optOutIgnored: number
+  alreadySent: number
+  activeClientsBlocked: number
+  errors: number
+  testReimports: number
+  details?: Array<{ name: string; phoneE164: string; reason: string; queued: boolean }>
+}
+
 interface Props {
-  onConfirmImport: (file: File, forceTestReimport?: boolean) => Promise<{
-    imported: number
-    valid: number
-    queued: number
-    duplicates: number
-    invalid: number
-    optOutIgnored: number
-    alreadySent: number
-    activeClientsBlocked: number
-    errors: number
-    testReimports: number
-    details?: Array<{ name: string; phoneE164: string; reason: string; queued: boolean }>
-  } | null>
+  leadsImportados?: number
+  onConfirmImport: (file: File, forceTestReimport?: boolean) => Promise<ImportSummary | null>
   onConfirmTestReimport: () => Promise<boolean>
 }
 
-export function ImportMiniCard({ onConfirmImport, onConfirmTestReimport }: Props) {
+export function ImportMiniCard({ leadsImportados = 0, onConfirmImport, onConfirmTestReimport }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [summary, setSummary] = useState<Awaited<ReturnType<Props["onConfirmImport"]>>>(null)
-  const [confirmed, setConfirmed] = useState(false)
+  const [summary, setSummary] = useState<ImportSummary | null>(null)
+  const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [forceLoading, setForceLoading] = useState(false)
 
@@ -31,113 +34,129 @@ export function ImportMiniCard({ onConfirmImport, onConfirmTestReimport }: Props
   const firstReason = summary?.details?.find((detail) => !detail.queued)?.reason
 
   const handlePick = () => inputRef.current?.click()
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (f) {
-      setFile(f)
-      setSummary(null)
-      setConfirmed(false)
-    }
+  const setNextFile = (nextFile?: File) => {
+    if (!nextFile) return
+    setFile(nextFile)
+    setSummary(null)
+  }
+
+  const importFile = async (forceTestReimport = false) => {
+    if (!file) return
+    if (forceTestReimport && !(await onConfirmTestReimport())) return
+    if (forceTestReimport) setForceLoading(true)
+    else setLoading(true)
+    const result = await onConfirmImport(file, forceTestReimport)
+    setSummary(result)
+    setLoading(false)
+    setForceLoading(false)
   }
 
   return (
-    <section className="flex h-full flex-col rounded-lg border border-border bg-card p-3">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        Importação
-      </h2>
+    <section className="glass-card flex h-full flex-col rounded-3xl p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase text-muted-foreground">
+          Importar leads
+        </p>
+        <span className="rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold text-secondary-foreground">
+          {leadsImportados} na base
+        </span>
+      </div>
 
       <input
         ref={inputRef}
         type="file"
         accept=".xlsx,.xls,.csv"
-        className="hidden"
-        onChange={handleFile}
+        className="sr-only"
+        onChange={(event) => setNextFile(event.target.files?.[0] || undefined)}
       />
 
-      <div className="flex flex-1 flex-col justify-center gap-2">
-        {/* Linha do arquivo */}
-        <button
-          onClick={handlePick}
-          className="flex w-full items-center gap-2.5 rounded-md border border-border bg-[oklch(0.16_0.011_243)] px-2.5 py-2 text-left transition-colors hover:border-primary/50"
-        >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[var(--success)]/15">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--success)]" aria-hidden="true">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-            </svg>
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-medium text-foreground">
-              {file?.name ?? "Selecionar planilha Excel"}
-            </span>
-            <span className="text-[10px] text-muted-foreground">
-              {file ? "Toque para trocar" : ".xlsx, .xls ou .csv"}
-            </span>
-          </span>
-          {summary && (
-            <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-foreground">
-              {summary.queued} fila
-            </span>
-          )}
-        </button>
-        {summary && (
-          <div className="space-y-1 text-[10px]">
-            <div className="grid grid-cols-3 gap-1 text-center">
-              <span className="rounded bg-secondary px-1 py-1 text-foreground">{summary.imported} lidos</span>
-              <span className="rounded bg-secondary px-1 py-1 text-foreground">{summary.valid} validos</span>
-              <span className="rounded bg-secondary px-1 py-1 text-[var(--success)]">{summary.queued} fila</span>
-              <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.duplicates} dup.</span>
-              <span className="rounded bg-secondary px-1 py-1 text-destructive">{summary.invalid} inval.</span>
-              <span className="rounded bg-secondary px-1 py-1 text-[var(--warning)]">{summary.optOutIgnored} opt-out</span>
-              <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.alreadySent} ja enviados</span>
-              <span className="rounded bg-secondary px-1 py-1 text-muted-foreground">{summary.activeClientsBlocked} clientes</span>
-              <span className="rounded bg-secondary px-1 py-1 text-destructive">{summary.errors} erros</span>
-            </div>
-            {firstReason && (
-              <p className="rounded border border-border bg-[oklch(0.16_0.011_243)] px-2 py-1 text-muted-foreground">
-                {summary.details?.[0]?.name || "Lead"}: {firstReason}
-              </p>
-            )}
-            {summary.testReimports > 0 && (
-              <p className="rounded bg-[var(--success)]/15 px-2 py-1 text-[var(--success)]">
-                {summary.testReimports} reimportado como teste autorizado.
-              </p>
-            )}
-          </div>
-        )}
-      </div>
-
       <button
-        onClick={async () => {
-          if (!file) return
-          setLoading(true)
-          const result = await onConfirmImport(file)
-          setSummary(result)
-          setConfirmed(true)
-          setLoading(false)
+        type="button"
+        onClick={handlePick}
+        onDragOver={(event) => {
+          event.preventDefault()
+          setDragging(true)
         }}
-        disabled={!file || loading}
-        className={`mt-2 w-full rounded-md py-1.5 text-[11px] font-medium transition-colors ${
-          confirmed
-            ? "bg-[var(--success)]/15 text-[var(--success)]"
-            : "bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          setDragging(false)
+          setNextFile(event.dataTransfer.files?.[0] || undefined)
+        }}
+        className={`mt-4 flex flex-1 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-4 py-8 text-center transition-colors ${
+          dragging
+            ? "border-primary bg-primary/5"
+            : "border-border bg-secondary/40 hover:border-primary/50 hover:bg-secondary/70"
         }`}
       >
-        {loading ? "Importando..." : confirmed ? "Importação confirmada" : "Confirmar importação"}
+        <span className="metal-tile grid h-12 w-12 place-items-center rounded-2xl text-primary">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </span>
+        <span className="max-w-full truncate text-sm font-semibold text-foreground">
+          {file?.name || "Arraste sua planilha ou clique"}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          Aceita arquivos .xlsx e .csv
+        </span>
       </button>
+
+      {summary && (
+        <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+          {[
+            ["Lidos", summary.imported],
+            ["Adicionados", summary.queued],
+            ["Inválidos", summary.invalid],
+            ["Duplicados", summary.duplicates + summary.alreadySent],
+            ["Opt-out", summary.optOutIgnored],
+            ["Clientes", summary.activeClientsBlocked],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-xl bg-secondary/60 px-2 py-2">
+              <p className="text-lg font-bold leading-none text-foreground">{value}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {summary && (
+        <p className={`mt-3 rounded-xl px-3 py-2 text-xs font-medium ${
+          summary.queued > 0 ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-secondary/60 text-muted-foreground"
+        }`}>
+          {summary.queued > 0
+            ? `${summary.queued} lead(s) validado(s) e prontos para a fila.`
+            : "Nenhum lead novo entrou na fila. Revise a planilha ou os bloqueios."}
+        </p>
+      )}
+
+      {firstReason && (
+        <p className="mt-3 rounded-xl bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
+          {summary?.details?.[0]?.name || "Lead"}: {firstReason}
+        </p>
+      )}
+
+      {summary?.testReimports ? (
+        <p className="mt-3 rounded-xl bg-[var(--success)]/10 px-3 py-2 text-xs font-medium text-[var(--success)]">
+          {summary.testReimports} número autorizado reimportado para teste.
+        </p>
+      ) : null}
+
+      <button
+        onClick={() => void importFile(false)}
+        disabled={!file || loading}
+        className="btn-glossy mt-4 w-full rounded-xl py-2.5 text-xs font-semibold text-primary-foreground transition-opacity disabled:opacity-40"
+      >
+        {loading ? "Importando..." : "Confirmar importação"}
+      </button>
+
       {blocked && (
         <button
-          onClick={async () => {
-            if (!file) return
-            if (!(await onConfirmTestReimport())) return
-            setForceLoading(true)
-            const result = await onConfirmImport(file, true)
-            setSummary(result)
-            setConfirmed(true)
-            setForceLoading(false)
-          }}
+          onClick={() => void importFile(true)}
           disabled={!file || forceLoading}
-          className="mt-1 w-full rounded-md border border-border py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          className="mt-2 w-full rounded-xl border border-border bg-card py-2.5 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-40"
         >
           {forceLoading ? "Reimportando..." : "Resetar teste autorizado"}
         </button>

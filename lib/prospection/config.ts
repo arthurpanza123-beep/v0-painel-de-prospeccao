@@ -18,6 +18,7 @@ export interface ProspectionConfig {
   prospectionPublicUrl: string
   evolutionTimeoutMs: number
   realAllowedPhones: string[]
+  allowImportedRealRecipients: boolean
   storageFile: string
   supabaseUrl: string
   supabaseServiceRoleKey: string
@@ -60,7 +61,7 @@ export function getProspectionConfig(): ProspectionConfig {
     allowedEndTime: String(process.env.PROSPECTION_ALLOWED_END_TIME || '20:00'),
     evolutionApiUrl: String(process.env.EVOLUTION_API_URL || '').replace(/\/+$/, ''),
     evolutionApiKey: String(process.env.EVOLUTION_API_KEY || ''),
-    evolutionInstance: String(process.env.EVOLUTION_PROSPECTION_INSTANCE || 'centralplay-leads'),
+    evolutionInstance: String(process.env.PROSPECTION_EVOLUTION_INSTANCE || process.env.EVOLUTION_PROSPECTION_INSTANCE || 'centralplay-leads'),
     connectedInstancePhone: String(process.env.PROSPECTION_CONNECTED_INSTANCE_PHONE || '').replace(/\D/g, ''),
     prospectionPublicUrl: String(process.env.PROSPECTION_PUBLIC_URL || 'https://prospeccao.centralplayplus.com.br').replace(/\/+$/, ''),
     evolutionTimeoutMs: intEnv(process.env.EVOLUTION_TIMEOUT_MS, 30000),
@@ -68,6 +69,7 @@ export function getProspectionConfig(): ProspectionConfig {
       listEnv(process.env.PROSPECTION_REAL_ALLOWED_RECIPIENTS),
       listEnv(process.env.PROSPECTION_REAL_ALLOWED_PHONES),
     ),
+    allowImportedRealRecipients: boolEnv(process.env.PROSPECTION_ALLOW_IMPORTED_REAL_RECIPIENTS, false),
     storageFile: String(process.env.PROSPECTION_STORAGE_FILE || 'storage/prospection-db.json'),
     supabaseUrl: String(process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
     supabaseServiceRoleKey: String(process.env.SUPABASE_SERVICE_ROLE_KEY || ''),
@@ -78,6 +80,7 @@ export function getSafetyFlags(config = getProspectionConfig()) {
   return {
     dryRun: config.dryRun,
     enabled: config.enabled,
-    realSendingAllowed: config.enabled && !config.dryRun && config.realAllowedPhones.length > 0,
+    allowImportedRealRecipients: config.allowImportedRealRecipients,
+    realSendingAllowed: config.enabled && !config.dryRun && (config.realAllowedPhones.length > 0 || config.allowImportedRealRecipients),
   }
 }

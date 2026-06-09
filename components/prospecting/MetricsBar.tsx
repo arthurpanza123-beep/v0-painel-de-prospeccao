@@ -8,34 +8,28 @@ type NextSendCard = {
   tone?: string
 }
 
-const items = (s: CampaignStats, nextSend: NextSendCard) => [
-  { label: "Importados", shortLabel: "Import.", value: s.leadsImportados, tone: "text-foreground" },
-  { label: "Na fila", shortLabel: "Fila", value: s.naFila, tone: "text-foreground" },
-  { label: "Simuladas hoje", shortLabel: "Simul.", value: s.enviadosHoje, tone: "text-primary" },
-  { label: "Responderam", shortLabel: "Resp.", value: s.responderam, tone: "text-[var(--success)]" },
-  { label: "Próximo envio", shortLabel: "Próximo", value: nextSend.value, detail: nextSend.detail, tone: nextSend.tone || "text-[var(--warning)]", mono: true, featured: true },
+const metrics = (stats: CampaignStats, nextSend: NextSendCard) => [
+  { label: "Importados", value: stats.leadsImportados, sub: "Leads adicionados" },
+  { label: "Na fila", value: stats.naFila, sub: "Aguardando campanha" },
+  { label: "Enviados hoje", value: stats.enviadosHoje, sub: "Processados hoje" },
+  { label: "Responderam", value: stats.responderam, sub: "Retornos recebidos" },
+  { label: "Próximo envio", value: nextSend.value, sub: nextSend.detail, tone: nextSend.tone || "text-[var(--warning)]", mono: true },
 ]
 
 export function MetricsBar({ stats, nextSend }: { stats: CampaignStats; nextSend: NextSendCard }) {
   return (
-    <div className="grid grid-cols-5 gap-2">
-      {items(stats, nextSend).map((m) => (
-        <div
-          key={m.label}
-          className={`rounded-md border border-border bg-card px-2 py-1.5 sm:px-3 sm:py-2 ${m.featured ? "border-[var(--warning)]/25 bg-[var(--warning)]/5" : ""}`}
-        >
-          <p className="truncate text-[9px] font-medium uppercase tracking-wide text-muted-foreground sm:text-[10px]">
-            <span className="hidden sm:inline">{m.label}</span>
-            <span className="sm:hidden">{m.shortLabel}</span>
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {metrics(stats, nextSend).map((metric) => (
+        <div key={metric.label} className="metal-card rounded-2xl p-4">
+          <p className="truncate text-[11px] font-semibold uppercase text-muted-foreground">
+            {metric.label}
           </p>
-          <p className={`mt-0.5 truncate text-sm font-bold leading-none tabular-nums sm:text-lg ${m.tone} ${m.mono ? "font-mono" : ""}`}>
-            {m.value}
+          <p className={`mt-2 truncate text-2xl font-bold leading-none tabular-nums text-foreground ${metric.tone || ""} ${metric.mono ? "font-mono" : ""}`}>
+            {metric.value}
           </p>
-          {m.detail && (
-            <p className="mt-1 truncate text-[9px] text-muted-foreground sm:text-[10px]">
-              {m.detail}
-            </p>
-          )}
+          <p className="mt-2 truncate text-[11px] text-muted-foreground">
+            {metric.sub}
+          </p>
         </div>
       ))}
     </div>

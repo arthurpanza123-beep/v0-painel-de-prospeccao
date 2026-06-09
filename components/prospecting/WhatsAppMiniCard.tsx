@@ -27,7 +27,7 @@ const formatAge = (seconds?: number | null) => {
 
 function QrImage({ qrCode, sizeClass }: { qrCode?: string | null; sizeClass: string }) {
   return (
-    <div className="grid place-items-center rounded-md border border-zinc-200 bg-white p-3 shadow-sm">
+    <div className="grid place-items-center rounded-2xl bg-white p-3 shadow-[0_1px_0_0_oklch(1_0_0)_inset,0_10px_24px_-14px_oklch(0.45_0.05_255_/_0.4)]">
       {qrCode ? (
         <img
           src={qrCode}
@@ -36,128 +36,125 @@ function QrImage({ qrCode, sizeClass }: { qrCode?: string | null; sizeClass: str
           draggable={false}
         />
       ) : (
-        <div className={`${sizeClass} grid grid-cols-8 gap-px bg-white p-2`} aria-hidden="true">
-          {Array.from({ length: 64 }).map((_, i) => {
-            const seed = (i * 7 + ((i % 5) * 13)) % 10
-            return (
-              <span
-                key={i}
-                className={seed > 4 ? "bg-black" : "bg-white"}
-              />
-            )
-          })}
+        <div className={`${sizeClass} grid place-items-center rounded-xl border border-dashed border-border bg-secondary text-center text-xs text-muted-foreground`}>
+          Gere um QR Code
         </div>
       )}
     </div>
   )
 }
 
-export function WhatsAppMiniCard({ status, qrCode, qrAgeSeconds, instanceName = "centralplay-leads", connectedNumber, profileName, onRefreshQR }: Props) {
+export function WhatsAppMiniCard({
+  status,
+  qrCode,
+  qrAgeSeconds,
+  instanceName = "centralplay-leads",
+  connectedNumber,
+  profileName,
+  onRefreshQR,
+}: Props) {
   const [expanded, setExpanded] = useState(false)
   const connected = status === "conectado"
   const connecting = status === "conectando"
   const qrMayBeStale = typeof qrAgeSeconds === "number" && qrAgeSeconds > 45
-  const refreshLabel = qrMayBeStale ? "Gerar novo QR" : "Atualizar QR Code"
+  const refreshLabel = qrMayBeStale ? "Gerar novo QR" : "Atualizar QR"
 
   return (
-    <section className="flex h-full flex-col rounded-lg border border-border bg-card p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <section className="glass-card flex h-full flex-col rounded-3xl p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase text-muted-foreground">
           WhatsApp
-        </h2>
+        </p>
         <span
-          className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
             connected
-              ? "bg-[var(--success)]/15 text-[var(--success)]"
+              ? "bg-[var(--success)]/12 text-[var(--success)]"
               : connecting
-              ? "bg-primary/15 text-primary"
-              : "bg-destructive/15 text-destructive"
+              ? "bg-primary/12 text-primary"
+              : "bg-destructive/12 text-destructive"
           }`}
         >
           <span
             className={`h-1.5 w-1.5 rounded-full ${
-              connected
-                ? "bg-[var(--success)]"
-                : connecting
-                ? "bg-primary animate-pulse"
-              : "bg-destructive"
+              connected ? "bg-[var(--success)]" : connecting ? "bg-primary animate-pulse" : "bg-destructive"
             }`}
           />
           {statusLabel[status]}
         </span>
       </div>
 
-      <div className="flex flex-1 items-center justify-center overflow-hidden">
-        {connected ? (
-          <div className="flex flex-col items-center gap-2 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--success)]/15">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-[var(--success)]" aria-hidden="true">
-                <polyline points="20 6 9 17 4 12" />
+      {connected ? (
+        <div className="mt-4 flex flex-1 items-center gap-4">
+          <div className="relative grid h-24 w-24 shrink-0 place-items-center rounded-full sm:h-28 sm:w-28">
+            <span className="absolute inset-0 rounded-full bg-secondary shadow-inner" aria-hidden="true" />
+            <span className="absolute inset-[18px] grid place-items-center rounded-full bg-[var(--success)] text-white shadow-lg" aria-hidden="true">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17.5 14.4c-.3-.2-1.7-.8-2-.9-.3-.1-.5-.2-.6.2-.2.3-.7.9-.8 1-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.9-.8-1.4-1.7-1.6-2-.2-.3 0-.5.1-.6l.5-.5c.1-.2.2-.3.3-.5.1-.2 0-.4 0-.5 0-.2-.6-1.5-.9-2-.2-.5-.4-.4-.6-.4h-.5c-.2 0-.5.1-.7.3-.2.3-.9.9-.9 2.2s1 2.5 1.1 2.7c.1.2 1.9 2.9 4.6 4 .6.3 1.1.4 1.5.6.6.2 1.2.2 1.6.1.5-.1 1.7-.7 1.9-1.3.2-.7.2-1.2.2-1.3-.1-.2-.3-.2-.6-.4z" />
+                <path d="M12 2a10 10 0 0 0-8.7 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-2.8.7.8-2.8-.2-.3A8.2 8.2 0 1 1 12 20.2z" />
               </svg>
-            </div>
-            <div>
-              <p className="text-[12px] font-semibold text-foreground">{instanceName} conectada</p>
-              <p className="text-[11px] text-muted-foreground">{profileName || connectedNumber || "Sessão ativa"}</p>
-              {connectedNumber && <p className="text-[10px] text-muted-foreground">{connectedNumber}</p>}
-            </div>
+            </span>
           </div>
-        ) : (
-          <div className="flex w-full flex-col items-center justify-center gap-2 text-center sm:flex-row sm:text-left">
-            <QrImage qrCode={qrCode} sizeClass="h-[220px] w-[220px] lg:h-[180px] lg:w-[180px]" />
-            <div className="min-w-0 space-y-1.5 sm:max-w-[160px]">
-              <p className="text-[11px] leading-4 text-muted-foreground">
-                Abra o WhatsApp no celular e escaneie este QR Code.
-              </p>
-              <p className="text-[10px] text-muted-foreground">{formatAge(qrAgeSeconds)}</p>
-              <p className={`text-[10px] ${qrMayBeStale ? "text-chart-3" : "text-muted-foreground"}`}>
-                {qrMayBeStale ? "QR pode estar expirado. Gere um novo." : connecting ? "Aguardando leitura" : "Gere ou atualize o QR se não escanear."}
-              </p>
-            </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-lg font-bold text-foreground">{profileName || instanceName}</p>
+            <p className="mt-1 truncate text-sm text-muted-foreground">{connectedNumber || "Sessão ativa"}</p>
+            <p className="mt-3 inline-flex rounded-full bg-[var(--success)]/10 px-3 py-1 text-xs font-medium text-[var(--success)]">
+              Conexão estável
+            </p>
           </div>
-        )}
-      </div>
-
-      {!connected && (
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <button
-            onClick={onRefreshQR}
-            className="rounded-md bg-secondary py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            {refreshLabel}
-          </button>
-          <button
-            onClick={() => setExpanded(true)}
-            className="rounded-md border border-border py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            Ampliar QR Code
-          </button>
+        </div>
+      ) : (
+        <div className="mt-4 flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <QrImage qrCode={qrCode} sizeClass="h-44 w-44" />
+          <div>
+            <p className="text-sm font-semibold text-foreground">
+              {qrCode ? "Escaneie o QR Code" : "WhatsApp desconectado"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              WhatsApp → Aparelhos conectados → Conectar aparelho
+            </p>
+            <p className={`mt-1 text-[11px] ${qrMayBeStale ? "text-[var(--warning)]" : "text-muted-foreground"}`}>
+              {formatAge(qrAgeSeconds)}
+            </p>
+          </div>
+          <div className="grid w-full grid-cols-2 gap-2">
+            <button
+              onClick={onRefreshQR}
+              className="btn-glossy rounded-xl px-3 py-2 text-xs font-semibold text-primary-foreground"
+            >
+              {refreshLabel}
+            </button>
+            <button
+              onClick={() => setExpanded(true)}
+              disabled={!qrCode}
+              className="rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-40"
+            >
+              Ampliar
+            </button>
+          </div>
         </div>
       )}
 
-      {expanded && !connected && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="QR Code WhatsApp ampliado">
-          <div className="w-full max-w-[430px] rounded-lg border border-border bg-card p-4 shadow-2xl">
+      {expanded && !connected && qrCode && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="QR Code WhatsApp ampliado">
+          <div className="w-full max-w-[430px] rounded-2xl border border-border bg-card p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-[12px] font-semibold text-foreground">Conectar {instanceName}</p>
-                <p className="text-[11px] text-muted-foreground">{statusLabel[status]}</p>
+                <p className="text-sm font-semibold text-foreground">Conectar {instanceName}</p>
+                <p className="text-xs text-muted-foreground">{statusLabel[status]}</p>
               </div>
               <button
                 onClick={() => setExpanded(false)}
-                className="rounded-md border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 Fechar
               </button>
             </div>
             <div className="flex flex-col items-center gap-3 text-center">
               <QrImage qrCode={qrCode} sizeClass="h-[340px] w-[340px] max-h-[calc(100vw-64px)] max-w-[calc(100vw-64px)]" />
-              <p className="text-[12px] text-foreground">
-                Abra o WhatsApp no celular e escaneie este QR Code.
-              </p>
-              <p className="text-[11px] text-muted-foreground">{formatAge(qrAgeSeconds)}</p>
+              <p className="text-xs text-muted-foreground">{formatAge(qrAgeSeconds)}</p>
               <button
                 onClick={onRefreshQR}
-                className="w-full rounded-md bg-primary py-2 text-[12px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                className="btn-glossy w-full rounded-xl py-2 text-xs font-semibold text-primary-foreground"
               >
                 {refreshLabel}
               </button>

@@ -670,6 +670,40 @@ export async function recordInbound(input: { phone: string; text: string; classi
   })
 }
 
+export async function authorizeRealRecipient(input: { phone: string; flow?: string; source?: string }) {
+  if (postgresBackend.isEnabled()) return postgresBackend.authorizeRealRecipient(input)
+  const config = getProspectionConfig()
+  const phone = normalizePhone(input.phone)
+  if (!phone) return { ok: false, allowed: false, code: 'INVALID_PHONE', reason: 'Telefone invalido.' }
+  if (config.connectedInstancePhone && phone === config.connectedInstancePhone) {
+    return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_SELF_TARGET', reason: 'Telefone da propria instancia.' }
+  }
+  const db = await readDb()
+  if (db.optouts.some((optout) => optout.phone_e164 === phone)) {
+    return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_OPTOUT', reason: 'Telefone em opt-out.' }
+  }
+  const lead = db.leads
+    .filter((item) => item.phone_e164 === phone && !['duplicate', 'invalid_phone', 'opt_out'].includes(item.status))
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0]
+  if (!lead) return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_NOT_IMPORTED', reason: 'Telefone nao existe em lote importado valido.' }
+  const campaign = db.campaigns.find((item) => item.id === lead.campaign_id)
+  if (!campaign) return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_MISSING_CAMPAIGN', reason: 'Campanha do lead nao encontrada.' }
+  if (campaign.instance_name !== config.evolutionInstance) {
+    return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_WRONG_INSTANCE', reason: 'Campanha usa instancia diferente da prospeccao.' }
+  }
+  return {
+    ok: true,
+    allowed: true,
+    code: 'PROSPECTION_RECIPIENT_AUTHORIZED',
+    phone,
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    leadId: lead.id,
+    leadStatus: lead.status,
+    instanceName: campaign.instance_name,
+  }
+}
+
 export async function cleanupTestDryRunData() {
   if (postgresBackend.isEnabled()) return postgresBackend.cleanupTestDryRunData()
   return withLock(async (db) => {

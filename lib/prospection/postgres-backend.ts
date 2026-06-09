@@ -1018,6 +1018,73 @@ export async function recordInbound(input: { phone: string; text: string; classi
   })
 }
 
+export async function authorizeRealRecipient(input: { phone: string; flow?: string; source?: string }) {
+  await ensureReady()
+  const config = getProspectionConfig()
+  const phone = normalizePhone(input.phone)
+  if (!phone) return { ok: false, allowed: false, code: 'INVALID_PHONE', reason: 'Telefone invalido.' }
+  if (config.connectedInstancePhone && phone === config.connectedInstancePhone) {
+    return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_SELF_TARGET', reason: 'Telefone da propria instancia.' }
+  }
+  const rows = await query<{
+    lead_id: string
+    lead_status: string
+    campaign_id: string
+    campaign_name: string
+    campaign_status: string
+    instance_name: string
+    optout_id: string | null
+  }>(
+    `select
+        l.id as lead_id,
+        l.status as lead_status,
+        c.id as campaign_id,
+        c.name as campaign_name,
+        c.status as campaign_status,
+        c.instance_name as instance_name,
+        o.id as optout_id
+       from prospection_leads l
+       join prospection_campaigns c on c.id = l.campaign_id
+       left join prospection_optouts o on o.phone_e164 = l.phone_e164
+      where l.phone_e164=$1
+        and l.status not in ('duplicate','invalid_phone','opt_out')
+      order by l.created_at desc
+      limit 1`,
+    [phone],
+  )
+  const row = rows[0]
+  if (!row) return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_NOT_IMPORTED', reason: 'Telefone nao existe em lote importado valido.' }
+  if (row.optout_id) return { ok: false, allowed: false, code: 'PROSPECTION_BLOCKED_OPTOUT', reason: 'Telefone em opt-out.' }
+  if (row.instance_name !== config.evolutionInstance) {
+    return {
+      ok: false,
+      allowed: false,
+      code: 'PROSPECTION_BLOCKED_WRONG_INSTANCE',
+      reason: 'Campanha usa instancia diferente da prospeccao.',
+      phone,
+      campaignId: row.campaign_id,
+      campaignName: row.campaign_name,
+      leadId: row.lead_id,
+      instanceName: row.instance_name,
+      expectedInstance: config.evolutionInstance,
+    }
+  }
+  return {
+    ok: true,
+    allowed: true,
+    code: 'PROSPECTION_RECIPIENT_AUTHORIZED',
+    phone,
+    campaignId: row.campaign_id,
+    campaignName: row.campaign_name,
+    campaignStatus: row.campaign_status,
+    leadId: row.lead_id,
+    leadStatus: row.lead_status,
+    instanceName: row.instance_name,
+    flow: input.flow || null,
+    source: input.source || null,
+  }
+}
+
 export async function cleanupTestDryRunData() {
   await ensureReady()
   return withTx(async (tx) => {

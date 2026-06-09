@@ -239,16 +239,21 @@ export async function disconnectWhatsapp() {
   }
 }
 
-export async function sendProspectionText(input: { phone: string; message: string }) {
+export async function sendProspectionText(input: { phone: string; message: string; allowCampaignRecipient?: boolean }) {
   const config = getProspectionConfig()
   const phone = normalizePhone(input.phone)
   if (!phone) return { ok: false, code: 'INVALID_PHONE', message: 'Telefone invalido.' }
+  if (config.connectedInstancePhone && phone === config.connectedInstancePhone) {
+    return { ok: false, dryRun: false, code: 'PROSPECTION_BLOCKED_SELF_TARGET', message: 'Destino bloqueado: telefone da propria instancia.', phone: maskPhone(phone) }
+  }
 
   if (config.dryRun || !config.enabled) {
     return { ok: true, dryRun: true, code: 'PROSPECTION_DRY_RUN', message: 'Dry-run: envio real bloqueado.', phone: maskPhone(phone) }
   }
 
-  if (!config.realAllowedPhones.includes(phone)) {
+  const allowedByList = config.realAllowedPhones.includes(phone)
+  const allowedByCampaign = Boolean(config.allowImportedRealRecipients && input.allowCampaignRecipient)
+  if (!allowedByList && !allowedByCampaign) {
     return { ok: false, dryRun: false, code: 'REAL_SEND_NOT_ALLOWED', message: 'Envio real bloqueado fora da allowlist.', phone: maskPhone(phone) }
   }
 
