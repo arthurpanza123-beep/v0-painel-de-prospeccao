@@ -607,11 +607,18 @@ export async function recordFlowResult(input: { flow: 'welcome' | 'install'; pho
   return withLock(async (db) => {
     const phone = normalizePhone(input.phone)
     const lead = db.leads.find((item) => item.id === input.leadId) || db.leads.find((item) => item.phone_e164 === phone)
+    const isDryRun = input.code === 'WELCOME_DRY_RUN' || input.code === 'INSTALL_DRY_RUN'
     event(db, {
       campaign_id: input.campaignId || lead?.campaign_id || null,
       lead_id: input.leadId || lead?.id || null,
-      event_type: input.flow === 'welcome' ? input.ok ? 'WELCOME_SENT' : 'WELCOME_FAILED' : input.ok ? 'INSTALL_SENT' : 'INSTALL_FAILED',
-      message: input.ok ? 'Flow de prospeccao enviado.' : 'Falha ao chamar flow de prospeccao.',
+      event_type: input.code === 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED'
+        ? 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED'
+        : input.code === 'PROSPECTION_PANEL2_TRIGGER_DISABLED'
+        ? 'PROSPECTION_PANEL2_TRIGGER_DISABLED'
+        : isDryRun
+        ? input.flow === 'welcome' ? 'WELCOME_DRY_RUN' : 'INSTALL_DRY_RUN'
+        : input.flow === 'welcome' ? input.ok ? 'WELCOME_SENT' : 'WELCOME_FAILED' : input.ok ? 'INSTALL_SENT' : 'INSTALL_FAILED',
+      message: isDryRun ? 'Flow de prospeccao simulado.' : input.ok ? 'Flow de prospeccao enviado.' : 'Falha ao chamar flow de prospeccao.',
       metadata: { ...(input.metadata || {}), targetPhone: phone, flow: input.flow, device: input.device || null, code: input.code },
     })
     return { ok: true }

@@ -69,7 +69,8 @@ function pickInstanceName(payload: Record<string, unknown>) {
   return String(data.instance || data.instanceName || payload.instance || payload.instanceName || config.evolutionInstance || 'unknown').trim()
 }
 
-async function runReservedAction(action: FlowAction) {
+async function runReservedAction(action: FlowAction, context: { remoteJid?: string; messageId?: string | null; fromMe?: boolean; connectedInstancePhone?: string | null }) {
+  const config = getProspectionConfig()
   const type = String(action.type || '')
   const phone = normalizePhone(action.phone)
   const idempotencyKey = String(action.idempotencyKey || '')
@@ -77,6 +78,34 @@ async function runReservedAction(action: FlowAction) {
   const campaignId = action.campaignId ? String(action.campaignId) : null
   const instanceName = action.instanceName ? String(action.instanceName) : null
   if (!phone || !idempotencyKey) return
+  const basePayload = {
+    source: 'prospection',
+    phone,
+    customerPhone: phone,
+    to: phone,
+    recipient: phone,
+    name: String(action.name || ''),
+    idempotencyKey,
+    dryRun: config.dryRun || !config.enabled,
+  }
+  await recordProspectionEvent({
+    eventType: 'PROSPECTION_PANEL2_CALL_PREPARED',
+    message: 'Payload para Painel 2 preparado.',
+    phone,
+    instanceName,
+    messageId: context.messageId || null,
+    metadata: {
+      source: 'prospection',
+      flow: type,
+      targetPhone: phone,
+      leadPhone: phone,
+      connectedInstancePhone: context.connectedInstancePhone || null,
+      remoteJid: context.remoteJid || null,
+      fromMe: Boolean(context.fromMe),
+      panel2Payload: type === 'install' ? { ...basePayload, device: String(action.device || '') } : basePayload,
+      idempotencyKey,
+    },
+  })
   if (type === 'welcome') {
     const result = await triggerWelcome({ phone, name: String(action.name || ''), idempotencyKey })
     await recordFlowResult({ flow: 'welcome', phone, leadId, campaignId, ok: Boolean(result.ok), code: String(result.code || ''), metadata: { status: (result as { status?: number }).status || null, idempotencyKey, instanceName } })
@@ -121,7 +150,7 @@ export async function POST(request: Request) {
 
   const action = (record as { action?: FlowAction }).action || null
   if (action && ['welcome', 'install'].includes(String(action.type || ''))) {
-    void runReservedAction(action).catch((error) => {
+    void runReservedAction(action, { remoteJid: pickRemoteJid(payload), messageId, fromMe: false, connectedInstancePhone: connectedPhone || null }).catch((error) => {
       console.warn(`[PROSPECTION_FLOW_FAILED] ${JSON.stringify({ phone, action: action.code, error: error instanceof Error ? error.message : String(error) })}`)
     })
   }

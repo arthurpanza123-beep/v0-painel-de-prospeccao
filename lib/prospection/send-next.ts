@@ -1,6 +1,6 @@
 import { getProspectionConfig } from './config'
 import { sendProspectionText } from './evolution'
-import { completeSend, failSend, reserveNextLead } from './store'
+import { completeSend, failSend, recordProspectionEvent, reserveNextLead } from './store'
 
 export async function sendNextProspectionLead(input?: { force?: boolean; campaignId?: string }) {
   const reserved = await reserveNextLead(input)
@@ -11,6 +11,15 @@ export async function sendNextProspectionLead(input?: { force?: boolean; campaig
   try {
     const send = await sendProspectionText({ phone: lead.phone_e164, message: body })
     if (!send.ok) {
+      if (send.code === 'REAL_SEND_NOT_ALLOWED' || send.code === 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED') {
+        await recordProspectionEvent({
+          eventType: 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED',
+          message: 'Envio real bloqueado fora da allowlist.',
+          phone: lead.phone_e164,
+          instanceName: campaign.instance_name,
+          metadata: { campaignId: campaign.id, leadId: lead.id, code: send.code },
+        }).catch(() => null)
+      }
       await failSend({ campaignId: campaign.id, leadId: lead.id, error: `${send.code}: ${send.message || 'Falha no envio.'}` })
       return { ok: false, code: send.code, send }
     }

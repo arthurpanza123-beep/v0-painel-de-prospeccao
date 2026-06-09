@@ -16,14 +16,36 @@ async function callPanel2(path: string, body: Record<string, unknown>) {
   }
 }
 
+function panel2Code(result: { ok: boolean; payload: unknown }, fallback: string) {
+  if (result.payload && typeof result.payload === 'object' && 'code' in result.payload) {
+    const code = String((result.payload as { code?: unknown }).code || '').trim()
+    if (code) return code
+  }
+  return fallback
+}
+
+function realFlowBlocked(phone: string) {
+  const config = getProspectionConfig()
+  if (config.dryRun || !config.enabled) return false
+  return !config.realAllowedPhones.includes(phone)
+}
+
+function panel2TriggerDisabled() {
+  return !getProspectionConfig().triggerPanel2Enabled
+}
+
 export async function triggerWelcome(input: { phone: string; name?: string | null; idempotencyKey: string }) {
   const config = getProspectionConfig()
   const phone = normalizePhone(input.phone)
   if (!phone) return { ok: false, code: 'INVALID_PHONE', phone: '' }
+  if (panel2TriggerDisabled()) return { ok: false, code: 'PROSPECTION_PANEL2_TRIGGER_DISABLED', phone: maskPhone(phone) }
+  if (realFlowBlocked(phone)) return { ok: false, code: 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED', phone: maskPhone(phone) }
   try {
     const result = await callPanel2('/api/flows/welcome', {
       phone,
       customerPhone: phone,
+      to: phone,
+      recipient: phone,
       name: input.name || '',
       client: { name: input.name || '', phone },
       source: 'prospection',
@@ -31,7 +53,7 @@ export async function triggerWelcome(input: { phone: string; name?: string | nul
       idempotency_key: input.idempotencyKey,
       dryRun: config.dryRun || !config.enabled,
     })
-    return { ...result, code: 'WELCOME_TRIGGERED', phone: maskPhone(phone) }
+    return { ...result, code: panel2Code(result, 'WELCOME_TRIGGERED'), phone: maskPhone(phone) }
   } catch (error) {
     return { ok: false, code: 'WELCOME_TRIGGER_FAILED', phone: maskPhone(phone), error: error instanceof Error ? error.message : String(error) }
   }
@@ -41,10 +63,14 @@ export async function triggerInstall(input: { phone: string; name?: string | nul
   const config = getProspectionConfig()
   const phone = normalizePhone(input.phone)
   if (!phone) return { ok: false, code: 'INVALID_PHONE', phone: '' }
+  if (panel2TriggerDisabled()) return { ok: false, code: 'PROSPECTION_PANEL2_TRIGGER_DISABLED', phone: maskPhone(phone) }
+  if (realFlowBlocked(phone)) return { ok: false, code: 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED', phone: maskPhone(phone) }
   try {
     const result = await callPanel2('/api/flows/install', {
       phone,
       customerPhone: phone,
+      to: phone,
+      recipient: phone,
       name: input.name || '',
       client: { name: input.name || '', phone },
       app: process.env.PROSPECTION_DEFAULT_INSTALL_APP || 'XCloud',
@@ -54,7 +80,7 @@ export async function triggerInstall(input: { phone: string; name?: string | nul
       idempotency_key: input.idempotencyKey,
       dryRun: config.dryRun || !config.enabled,
     })
-    return { ...result, code: 'INSTALL_TRIGGERED', phone: maskPhone(phone) }
+    return { ...result, code: panel2Code(result, 'INSTALL_TRIGGERED'), phone: maskPhone(phone) }
   } catch (error) {
     return { ok: false, code: 'INSTALL_TRIGGER_FAILED', phone: maskPhone(phone), error: error instanceof Error ? error.message : String(error) }
   }

@@ -3,6 +3,7 @@ export interface ProspectionConfig {
   panel2ApiBaseUrl: string
   dryRun: boolean
   enabled: boolean
+  triggerPanel2Enabled: boolean
   prospectionDatabaseUrl: string
   defaultBatchLimit: number
   defaultWindowMinutes: number
@@ -49,6 +50,7 @@ export function getProspectionConfig(): ProspectionConfig {
     panel2ApiBaseUrl: String(process.env.PANEL2_API_BASE_URL || 'http://127.0.0.1:3002').replace(/\/+$/, ''),
     dryRun: boolEnv(process.env.PROSPECTION_DRY_RUN, true),
     enabled: boolEnv(process.env.PROSPECTION_ENABLED, false),
+    triggerPanel2Enabled: boolEnv(process.env.PROSPECTION_TRIGGER_PANEL2_ENABLED, true),
     prospectionDatabaseUrl: String(process.env.PROSPECTION_DATABASE_URL || '').trim(),
     defaultBatchLimit: intEnv(process.env.PROSPECTION_DEFAULT_BATCH_LIMIT, 15),
     defaultWindowMinutes: intEnv(process.env.PROSPECTION_DEFAULT_WINDOW_MINUTES, 50),

@@ -764,7 +764,14 @@ export async function recordFlowResult(input: { flow: 'welcome' | 'install'; pho
   await ensureReady()
   const phone = normalizePhone(input.phone)
   if (!phone) return
-  const eventType = input.flow === 'welcome'
+  const isDryRun = input.code === 'WELCOME_DRY_RUN' || input.code === 'INSTALL_DRY_RUN'
+  const eventType = input.code === 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED'
+    ? 'PROSPECTION_BLOCKED_NOT_ALLOWLISTED'
+    : input.code === 'PROSPECTION_PANEL2_TRIGGER_DISABLED'
+    ? 'PROSPECTION_PANEL2_TRIGGER_DISABLED'
+    : isDryRun
+    ? input.flow === 'welcome' ? 'WELCOME_DRY_RUN' : 'INSTALL_DRY_RUN'
+    : input.flow === 'welcome'
     ? input.ok ? 'WELCOME_SENT' : 'WELCOME_FAILED'
     : input.ok ? 'INSTALL_SENT' : 'INSTALL_FAILED'
   await withTx(async (tx) => {
@@ -780,7 +787,7 @@ export async function recordFlowResult(input: { flow: 'welcome' | 'install'; pho
                   active_flow_type=case when $2='sent' then 'welcome' else active_flow_type end,
                   updated_at=now()
             where id=$1`,
-          [lead.id, input.ok ? 'sent' : 'error'],
+          [lead.id, isDryRun ? 'pending' : input.ok ? 'sent' : 'error'],
         )
       } else {
         await tx.query(
@@ -789,7 +796,7 @@ export async function recordFlowResult(input: { flow: 'welcome' | 'install'; pho
                   active_flow_type='install',
                   updated_at=now()
             where id=$1`,
-          [lead.id, input.ok ? 'sent' : 'error'],
+          [lead.id, isDryRun ? 'pending' : input.ok ? 'sent' : 'error'],
         )
       }
     }
@@ -800,7 +807,7 @@ export async function recordFlowResult(input: { flow: 'welcome' | 'install'; pho
         input.campaignId || lead?.campaign_id || null,
         input.leadId || lead?.id || null,
         eventType,
-        input.ok ? 'Flow de prospeccao enviado.' : 'Falha ao chamar flow de prospeccao.',
+        isDryRun ? 'Flow de prospeccao simulado.' : input.ok ? 'Flow de prospeccao enviado.' : 'Falha ao chamar flow de prospeccao.',
         JSON.stringify({ ...(input.metadata || {}), targetPhone: phone, flow: input.flow, device: input.device || null, code: input.code }),
       ],
     )
