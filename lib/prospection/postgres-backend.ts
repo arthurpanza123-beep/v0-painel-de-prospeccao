@@ -608,10 +608,13 @@ export async function getStatus(input?: { campaignId?: string }) {
     ),
     query<{ next_send_after: string | null }>(`select next_send_after::text as next_send_after from prospection_campaigns where id=$1 and status='running' limit 1`, [activeCampaign.id]),
     query<{ message: string; created_at: string }>(
-      `select message, created_at::text as created_at
-         from prospection_events
-        where campaign_id=$1 and event_type='PROSPECTION_RATE_LIMIT_SAFETY_PAUSED'
-        order by created_at desc
+      `select e.message, e.created_at::text as created_at
+         from prospection_events e
+         join prospection_campaigns c on c.id=e.campaign_id
+        where e.campaign_id=$1
+          and e.event_type='PROSPECTION_RATE_LIMIT_SAFETY_PAUSED'
+          and e.created_at >= c.updated_at - interval '1 second'
+        order by e.created_at desc
         limit 1`,
       [activeCampaign.id],
     ),
