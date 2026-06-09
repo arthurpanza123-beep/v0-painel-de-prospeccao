@@ -52,7 +52,7 @@ export function ConfirmModal({
         <h2 id="confirm-title" className="text-sm font-semibold text-foreground">
           {title}
         </h2>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <p className="mt-2 whitespace-pre-line text-xs leading-5 text-muted-foreground">
           {description}
         </p>
         <div className="mt-5 flex justify-end gap-2">

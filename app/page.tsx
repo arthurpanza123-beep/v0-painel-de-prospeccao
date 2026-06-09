@@ -309,10 +309,10 @@ export default function ProspectingPage() {
     if (!(await askConfirmation({
       title: realBatchMode ? "Iniciar campanha real?" : "Iniciar em modo seguro?",
       text: realBatchMode
-        ? "Você confirma que deseja iniciar envio real? As mensagens serão enviadas respeitando o intervalo de 2min40s a 4min30s."
+        ? "As mensagens serão enviadas pelo WhatsApp conectado, respeitando intervalo de 2min40s a 4min30s e limite de 15 mensagens a cada 50 minutos.\n\nContatos já abordados, opt-out, duplicados e números errados serão ignorados."
         : "A campanha será processada sem envio real. Use esse modo para validar fila, timer e respostas.",
       cancelLabel: "Cancelar",
-      confirmLabel: realBatchMode ? "Iniciar campanha" : "Iniciar",
+      confirmLabel: realBatchMode ? "Iniciar campanha real" : "Iniciar",
     }))) return
     const id = await ensureCampaign()
     if (!id) return

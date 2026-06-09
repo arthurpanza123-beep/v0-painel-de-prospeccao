@@ -220,7 +220,7 @@ function flowWindowKey(prefix: 'welcome' | 'install', phone: string, device?: st
     : `prospection:welcome:${phone}:${dayBucket}`
 }
 
-const identityReply = `Oi, tudo bem? Aqui é o Bruno.\n\nEstou fazendo um contato comercial sobre uma opção de entretenimento com canais ao vivo, filmes e séries. Pode ter sido por uma base de pessoas com perfil de interesse nesse tipo de serviço.\n\nSe você quiser, te explico rapidinho e sem compromisso. Se não quiser receber, é só responder NÃO que eu não chamo mais.`
+const identityReply = `Oi, tudo bem? Aqui é o Bruno.\n\nEstou fazendo um contato comercial sobre uma opção de entretenimento com canais ao vivo, filmes e séries.\n\nPosso te explicar rapidinho e sem compromisso? Se não quiser receber, é só responder NÃO que eu não chamo mais.`
 const wrongNumberReply = 'Desculpa pelo engano. Vou corrigir aqui para não incomodar novamente.'
 
 function isRecent(value: unknown, hours: number) {

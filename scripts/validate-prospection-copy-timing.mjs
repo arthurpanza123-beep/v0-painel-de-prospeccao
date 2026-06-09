@@ -59,6 +59,23 @@ async function post(pathname, body) {
   return { response, json }
 }
 
+async function postMultipart(pathname, form) {
+  let response
+  let lastError
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      response = await fetch(`${baseUrl}${pathname}`, { method: 'POST', body: form })
+      break
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  }
+  if (!response) throw lastError || new Error('fetch failed')
+  const json = await response.json().catch(() => ({}))
+  return { response, json }
+}
+
 function webhookPayload(targetPhone, id, text) {
   return {
     event: 'MESSAGES_UPSERT',
@@ -89,6 +106,21 @@ async function createCampaign(name, leads) {
   return campaignId
 }
 
+async function createCampaignViaApi(name) {
+  const { response, json } = await post('/api/prospection/campaigns', { name })
+  assert(response.ok && json.campaign?.id, 'criacao de campanha via API falhou.', json)
+  return json.campaign.id
+}
+
+async function uploadCsv(campaignId, csv) {
+  const form = new FormData()
+  form.append('campaignId', campaignId)
+  form.append('file', new Blob([csv], { type: 'text/csv' }), `${runId}.csv`)
+  const { response, json } = await postMultipart('/api/prospection/upload', form)
+  assert(response.ok, 'upload CSV falhou.', json)
+  return json.summary
+}
+
 async function sendNext(campaignId) {
   const { response, json } = await post(`/api/prospection/send-next?campaignId=${encodeURIComponent(campaignId)}`)
   return { status: response.status, ...json }
@@ -101,6 +133,29 @@ async function testName(fullName, expectedGreeting) {
   assert(sent.ok, 'send-next de nome nao concluiu em dry-run.', sent)
   const message = await pool.query(`select body from prospection_messages where campaign_id=$1 and direction='outbound' order by created_at desc limit 1`, [campaignId])
   assert(String(message.rows[0]?.body || '').startsWith(expectedGreeting), 'saudacao renderizada incorreta.', { body: message.rows[0]?.body, expectedGreeting })
+}
+
+async function testImport() {
+  const newPhone = phone(31)
+  const contactedPhone = phone(32)
+  const optoutPhone = phone(33)
+  const contactedCampaignId = await createCampaign(`${runId}-contacted-source`, [{ name: 'Ja Contatado', phone: contactedPhone }])
+  await sendNext(contactedCampaignId)
+  await pool.query(`insert into prospection_optouts (phone_e164, reason) values ($1,'validacao opt-out') on conflict (phone_e164) do update set reason=excluded.reason`, [optoutPhone])
+
+  const campaignId = await createCampaignViaApi(`${runId}-import`)
+  const summary = await uploadCsv(campaignId, [
+    'Nome,Telefone',
+    `Lead Novo,${newPhone}`,
+    `Ja Contatado,${contactedPhone}`,
+    `Optout,${optoutPhone}`,
+    'Invalido,123',
+  ].join('\n'))
+
+  assert(summary?.queued === 1, 'lead novo nao entrou sozinho na fila.', summary)
+  assert(summary?.alreadySent >= 1, 'lead ja contatado nao foi ignorado.', summary)
+  assert(summary?.optOutIgnored >= 1, 'opt-out nao foi ignorado.', summary)
+  assert(summary?.invalid >= 1, 'telefone invalido nao foi marcado.', summary)
 }
 
 async function testTiming() {
@@ -160,6 +215,7 @@ async function main() {
   assert(dbUrl, 'PROSPECTION_DATABASE_URL ausente.')
   await testName('GABRIELLE DOS SANTOS CIPRIANO', 'Olá, *Gabrielle*, tudo bem?')
   await testName('ACME SERVICOS LTDA', 'Olá, tudo bem?')
+  await testImport()
   await testTiming()
   await testInbound()
   console.log(JSON.stringify({ ok: true, runId }, null, 2))
